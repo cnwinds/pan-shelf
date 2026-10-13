@@ -1,0 +1,17 @@
+# 百度账号凭据
+bduss.txt
+bd_open.json
+
+# 数据库、cookie、浏览器配置、日志
+state/
+
+# 依赖与构建产物
+node_modules/
+web/dist/
+
+# 第三方可执行文件（BaiduPCS-Go 自行下载放到 bin/）
+bin/*.exe
+bin/BaiduPCS-Go*
+
+*.log
+*.tmp.mjs

@@ -1,0 +1,4 @@
+# 百度盘 Cookie（从浏览器 DevTools 复制，每行一个，或一行分号分隔）
+# 获取方法见 README「配置登录态」一节
+BDUSS=你的BDUSS值
+STOKEN=你的STOKEN值

@@ -1,0 +1,11 @@
+{
+  "site": "https://2468c.com",
+  "category_path": "/ps5game",
+  "list_pages_max": 20,
+  "list_pages_default": 3,
+  "dest_dir": "/游戏资源/PS5",
+  "detail_delay_sec": 5,
+  "transfer_delay_ms": 1000,
+  "serial_prefixes": "PPSA|CUSA|CUAS|PUSA|PCAS|PRLA|PLAS|PASA|PEGA|ACBA|BLAS|HLPS",
+  "http_timeout_sec": 40
+}
