@@ -7,6 +7,7 @@ import { recoverOnBoot } from './jobs.mjs';
 import { startScheduler } from './scheduler.mjs';
 import { WEB_DIST, SERVER_INFO } from './paths.mjs';
 import { initCatalog } from './catalog.mjs';
+import { startCatalogSync } from './catalog-sync.mjs';
 import routes from './api.mjs';
 import './tasks/crawl.mjs';
 import './tasks/transfer.mjs';
@@ -50,4 +51,5 @@ process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 
 startScheduler();
+startCatalogSync();
 console.log(`盘架 PanShelf 已启动：http://127.0.0.1:${port}`);
