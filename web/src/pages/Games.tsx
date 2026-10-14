@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -18,6 +18,10 @@ import {
   SkipForward,
   Undo2,
   ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-react';
 import { api, type Game, type Job, type PanState, type RemovalPreview } from '../lib/api';
 import { useAccount, useSetup, useSources } from '../lib/hooks';
@@ -66,7 +70,28 @@ const FORMAT_LABELS: Record<string, { label: string; cls: string }> = {
   unknown: { label: '未标注', cls: 'bg-line-2 text-muted' },
 };
 
-const PAGE_SIZE = 120;
+// 每页大约这么多个，实际取「列数 × 行数」，保证每页最后一行是满的
+const TARGET_PAGE_SIZE = 120;
+
+// 读取封面墙实际排出的列数（用一个同样式、零高度的探针网格，随窗口宽度变化）
+function useShelfColumns() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [cols, setCols] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const tracks = getComputedStyle(el).gridTemplateColumns.split(' ').filter(Boolean).length;
+      setCols(Math.max(1, tracks));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, cols] as const;
+}
+
 
 const LANG_NAMES: Record<string, string> = {
   zh: '中文', ch: '中文', en: '英语', ja: '日语', ko: '韩语', fr: '法语', de: '德语', es: '西班牙语', it: '意大利语',
@@ -120,6 +145,9 @@ export function Games() {
   const cnOnly = sp.get('cn') === '1';
   const multiOnly = sp.get('multi') === '1';
 
+  const [probeRef, cols] = useShelfColumns();
+  const pageSize = cols ? cols * Math.max(3, Math.round(TARGET_PAGE_SIZE / cols)) : 0;
+
   const [batchMode, setBatchMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activePostId, setActivePostId] = useState<string | null>(null);
@@ -146,13 +174,13 @@ export function Games() {
   });
 
   const games = useQuery({
-    queryKey: ['games', sourceId, view, sort, q, page, cnOnly, multiOnly],
+    queryKey: ['games', sourceId, view, sort, q, page, pageSize, cnOnly, multiOnly],
     queryFn: () =>
       api.get<{ total: number; rows: Game[] }>(
-        `/games?source_id=${sourceId}&view=${view}&sort=${sort}&page=${page}&size=${PAGE_SIZE}&q=${encodeURIComponent(q)}` +
+        `/games?source_id=${sourceId}&view=${view}&sort=${sort}&page=${page}&size=${pageSize}&q=${encodeURIComponent(q)}` +
           `${cnOnly ? '&cn=1' : ''}${multiOnly ? '&multi=1' : ''}`
       ),
-    enabled: !!sourceId,
+    enabled: !!sourceId && pageSize > 0,
     placeholderData: keepPreviousData,
   });
 
@@ -193,7 +221,31 @@ export function Games() {
 
   const rows = games.data?.rows || [];
   const total = games.data?.total || 0;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pages = Math.max(1, Math.ceil(total / (pageSize || TARGET_PAGE_SIZE)));
+
+  // 窗口变宽变窄导致每页数量变化时，换算页码，让当前看到的第一个游戏仍在当前页
+  const prevSize = useRef(0);
+  useEffect(() => {
+    const before = prevSize.current;
+    prevSize.current = pageSize;
+    if (!before || !pageSize || before === pageSize || page <= 1) return;
+    const firstIndex = (page - 1) * before;
+    updateParams({ page: String(Math.floor(firstIndex / pageSize) + 1) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageSize]);
+
+  // 页码超出范围（比如筛选后总数变少）时回到最后一页
+  useEffect(() => {
+    if (games.data && !games.isPlaceholderData && page > pages) updateParams({ page: pages > 1 ? String(pages) : null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [games.data, pages, page]);
+
+  const goPage = (n: number) => {
+    const target = Math.min(pages, Math.max(1, Math.round(n)));
+    if (target === page) return;
+    updateParams({ page: target > 1 ? String(target) : null });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const queuedCount = facets.data?.pending_transfer ?? 0;
   const failedCount = (facets.data?.transfer_failed || 0) + (facets.data?.detail_failed || 0);
 
@@ -381,7 +433,7 @@ export function Games() {
         </div>
       )}
 
-      {games.isLoading ? (
+      {games.isPending ? (
         <div className="py-20 text-center text-muted">正在加载游戏封面库…</div>
       ) : rows.length === 0 && setup.ready && !setup.done && !q ? (
         <div className="panel py-16">
@@ -415,39 +467,17 @@ export function Games() {
         </div>
       )}
 
+      <div ref={probeRef} className="shelf shelf-probe" aria-hidden="true" />
+
       {pages > 1 && (
-        <div className="mt-8 flex flex-wrap items-center justify-between gap-4 border-t border-line pt-5 text-[13px] text-muted">
-          <span>
-            共 <strong className="num text-ink">{total}</strong> 款游戏 · 当前第{' '}
-            <strong className="num text-ink">{page}</strong> / <span className="num">{pages}</span> 页
-            {queuedCount > 0 && ` · ${queuedCount} 款正在转存队列中`}
-          </span>
-          <div className="flex items-center gap-1.5">
-            <button
-              className="btn btn-sm"
-              disabled={page <= 1}
-              onClick={() => {
-                updateParams({ page: String(page - 1) });
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-            >
-              上一页
-            </button>
-            <span className="px-2 num text-xs">
-              {page} / {pages}
-            </span>
-            <button
-              className="btn btn-sm"
-              disabled={page >= pages}
-              onClick={() => {
-                updateParams({ page: String(page + 1) });
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-            >
-              下一页
-            </button>
-          </div>
-        </div>
+        <Pager
+          page={page}
+          pages={pages}
+          total={total}
+          pageSize={pageSize}
+          queuedCount={queuedCount}
+          onGo={goPage}
+        />
       )}
 
       {activePostId && (
@@ -481,6 +511,106 @@ export function Games() {
         />
       )}
     </>
+  );
+}
+
+// 页码按钮：首尾页 + 当前页附近，中间用省略号
+function pageItems(page: number, pages: number): (number | 'gap')[] {
+  const set = new Set([1, pages, page - 1, page, page + 1]);
+  if (page <= 3) [2, 3, 4].forEach(n => set.add(n));
+  if (page >= pages - 2) [pages - 1, pages - 2, pages - 3].forEach(n => set.add(n));
+  const nums = [...set].filter(n => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const out: (number | 'gap')[] = [];
+  nums.forEach((n, i) => {
+    if (i > 0 && n - nums[i - 1] > 1) out.push(n - nums[i - 1] === 2 ? n - 1 : 'gap');
+    out.push(n);
+  });
+  return out;
+}
+
+function Pager({
+  page,
+  pages,
+  total,
+  pageSize,
+  queuedCount,
+  onGo,
+}: {
+  page: number;
+  pages: number;
+  total: number;
+  pageSize: number;
+  queuedCount: number;
+  onGo: (n: number) => void;
+}) {
+  const [jump, setJump] = useState('');
+  const submitJump = () => {
+    const n = Number(jump);
+    if (Number.isFinite(n) && n >= 1) onGo(n);
+    setJump('');
+  };
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(total, page * pageSize);
+
+  return (
+    <nav className="pager" aria-label="翻页">
+      <span className="pager-info">
+        第 <strong className="num text-ink">{from}–{to}</strong> 款，共 <strong className="num text-ink">{total}</strong> 款
+        {queuedCount > 0 && ` · ${queuedCount} 款正在转存`}
+      </span>
+
+      <div className="pager-nav">
+        <button type="button" className="pager-btn" disabled={page <= 1} onClick={() => onGo(1)} title="首页" aria-label="首页">
+          <ChevronsLeft size={15} />
+        </button>
+        <button type="button" className="pager-btn" disabled={page <= 1} onClick={() => onGo(page - 1)} title="上一页" aria-label="上一页">
+          <ChevronLeft size={15} />
+        </button>
+        {pageItems(page, pages).map((it, i) =>
+          it === 'gap' ? (
+            <span key={`gap${i}`} className="pager-gap">…</span>
+          ) : (
+            <button
+              key={it}
+              type="button"
+              className={cx('pager-btn num', it === page && 'on')}
+              aria-current={it === page ? 'page' : undefined}
+              onClick={() => onGo(it)}
+            >
+              {it}
+            </button>
+          )
+        )}
+        <button type="button" className="pager-btn" disabled={page >= pages} onClick={() => onGo(page + 1)} title="下一页" aria-label="下一页">
+          <ChevronRight size={15} />
+        </button>
+        <button type="button" className="pager-btn" disabled={page >= pages} onClick={() => onGo(pages)} title="尾页" aria-label="尾页">
+          <ChevronsRight size={15} />
+        </button>
+
+        <form
+          className="pager-jump"
+          onSubmit={e => {
+            e.preventDefault();
+            submitJump();
+          }}
+        >
+          跳至
+          <input
+            className="num"
+            inputMode="numeric"
+            value={jump}
+            onChange={e => setJump(e.target.value.replace(/\D/g, ''))}
+            placeholder={String(page)}
+            aria-label="跳转页码"
+          />
+          页
+          <button type="submit" className="pager-btn" disabled={!jump}>
+            Go
+          </button>
+        </form>
+      </div>
+    </nav>
   );
 }
 

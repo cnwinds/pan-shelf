@@ -670,6 +670,89 @@
   grid-template-columns: repeat(auto-fill, minmax(164px, 1fr));
   gap: 2rem 1.35rem;
 }
+/* 只用来测量列数，不占高度 */
+.shelf.shelf-probe {
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+
+/* 翻页 */
+.pager {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.pager-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.pager-btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 0.55rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--deck);
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color 0.14s, color 0.14s, background 0.14s;
+}
+.pager-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: #3b475e;
+}
+.pager-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.pager-btn.on {
+  color: #fff;
+  font-weight: 600;
+  border-color: #4d8bff;
+  background: #4d8bff;
+}
+.pager-gap {
+  min-width: 20px;
+  text-align: center;
+  color: var(--faint);
+}
+.pager-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: 0.75rem;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--line);
+}
+.pager-jump input {
+  width: 3.4rem;
+  height: 32px;
+  padding: 0 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--deck);
+  color: var(--text);
+  font-size: 0.8rem;
+  text-align: center;
+  outline: none;
+}
+.pager-jump input:focus {
+  border-color: #4d8bff;
+}
 
 .tile {
   position: relative;
