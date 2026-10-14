@@ -1,94 +1,228 @@
-import { NavLink, Outlet } from 'react-router-dom';
-import { Gauge, Gamepad2, ListTree, HardDrive, SlidersHorizontal, X, CircleAlert, CircleCheck, Info, TriangleAlert } from 'lucide-react';
-import { useLive } from '../lib/live';
-import { useAccount, useOverview } from '../lib/hooks';
+import { useEffect, useState } from 'react';
+import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { X, CircleAlert, CircleCheck, Info, TriangleAlert, Pause, Play, Square } from 'lucide-react';
+import { useLive, useLiveProgress } from '../lib/live';
+import { useAccount, useJobAction, useOverview } from '../lib/hooks';
 import { bytes } from '../lib/format';
-import { Bar, cx } from './ui';
-
-const NAV = [
-  { to: '/', label: '总览', icon: Gauge, end: true },
-  { to: '/games', label: '游戏库', icon: Gamepad2 },
-  { to: '/jobs', label: '任务', icon: ListTree },
-  { to: '/storage', label: '网盘', icon: HardDrive },
-  { to: '/settings', label: '设置', icon: SlidersHorizontal },
-];
+import type { Job } from '../lib/api';
+import { PHASE } from './JobCard';
+import { cx } from './ui';
+import { BrandLogo } from './BrandLogo';
 
 export function Layout() {
-  const { connected, toasts, dismiss } = useLive();
+  const { toasts, dismiss } = useLive();
   const { data: acc } = useAccount();
   const { data: ov } = useOverview();
-  const running = ov?.active_jobs.filter(j => j.status === 'running').length || 0;
+  const loc = useLocation();
+  const nav = useNavigate();
+  const [sp, setSp] = useSearchParams();
+
+  const isLibrary = loc.pathname === '/' || loc.pathname.startsWith('/games');
+  const urlQ = isLibrary ? (sp.get('q') || '') : '';
+  const [searchText, setSearchText] = useState(urlQ);
+
+  useEffect(() => {
+    setSearchText(urlQ);
+  }, [urlQ]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const trimmed = searchText.trim();
+      if (isLibrary) {
+        const cur = sp.get('q') || '';
+        if (cur !== trimmed) {
+          const next = new URLSearchParams(sp);
+          if (trimmed) next.set('q', trimmed);
+          else next.delete('q');
+          next.delete('page');
+          setSp(next, { replace: true });
+        }
+      } else if (trimmed) {
+        nav(`/?q=${encodeURIComponent(trimmed)}`);
+      }
+    }, 240);
+    return () => window.clearTimeout(timer);
+  }, [searchText]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const activeJobs = ov?.active_jobs || [];
+  const runningCount = activeJobs.filter(j => j.status === 'running' || j.status === 'queued').length;
+  const primaryJob = activeJobs.find(j => j.status === 'running') || activeJobs[0];
   const q = acc?.quota;
+  const usedRatio = q?.total ? Math.min(100, Math.round((q.used / q.total) * 100)) : 0;
+  const lowQuota = q?.free != null && q.free < 300 * 1024 ** 3;
 
   return (
-    <div className="flex h-full">
-      <aside className="sticky top-0 flex h-screen w-[208px] shrink-0 flex-col bg-shell text-white max-md:hidden">
-        <div className="flex items-center gap-2.5 px-5 pt-5 pb-6">
-          <svg viewBox="0 0 32 32" className="size-7" aria-hidden><rect width="32" height="32" rx="7" fill="#262C38" /><path d="M7 15.5h18M7 24h18" stroke="#6E98FF" strokeWidth="2.2" strokeLinecap="round" /><rect x="9.5" y="8" width="4" height="7.5" rx="1" fill="#6E98FF" /><rect x="15" y="10" width="4" height="5.5" rx="1" fill="#6E98FF" opacity=".6" /><rect x="11" y="18.5" width="4" height="5.5" rx="1" fill="#6E98FF" opacity=".6" /><rect x="17.5" y="17" width="4" height="7" rx="1" fill="#6E98FF" /></svg>
-          <div>
-            <div className="font-display text-[17px] font-semibold leading-none tracking-tight">盘架</div>
-            <div className="mt-1 text-[11px] text-white/45">PanShelf · 游戏按需入盘</div>
+    <div className="min-h-screen flex flex-col">
+      <header className="bar">
+        <div className="bar-inner">
+          <Link to="/" className="mark" title="盘架 PanShelf · PS5/PS4 网盘游戏库管理">
+            <BrandLogo />
+            <span className="mark-text">
+              <strong>盘架</strong>
+              <small>PanShelf</small>
+            </span>
+          </Link>
+
+          <label className="find" aria-label="搜索游戏">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="M8.5 3a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11Zm4.4 9.8 3.6 3.6"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+            </svg>
+            <input
+              type="search"
+              placeholder="搜索游戏名或 Title ID"
+              autoComplete="off"
+              value={searchText}
+              onChange={e => setSearchText(e.target.value)}
+            />
+            {searchText && (
+              <button
+                type="button"
+                className="find-clear"
+                aria-label="清空搜索"
+                onClick={() => setSearchText('')}
+              >
+                ×
+              </button>
+            )}
+          </label>
+
+          <div className="bar-right">
+            {q?.total ? (
+              <Link to="/storage" className="quota-pill" title={`已用 ${bytes(q.used)} / 共 ${bytes(q.total)}`}>
+                <span>网盘剩余</span>
+                <strong className={cx(lowQuota && 'text-[#ff8a7a]!')}>{bytes(q.free)}</strong>
+                <span className={cx('quota-mini-bar', lowQuota && 'low')}>
+                  <span style={{ width: `${usedRatio}%` }} />
+                </span>
+              </Link>
+            ) : acc && !acc.transfer_login.ok ? (
+              <Link to="/settings/account" className="quota-pill text-[#ff8a7a]!">
+                网盘未登录
+              </Link>
+            ) : null}
+
+            <nav className="tabs" aria-label="主导航">
+              <NavLink to="/" end className={() => cx(isLibrary && 'active')}>
+                游戏库
+              </NavLink>
+              <NavLink to="/storage" className={({ isActive }) => cx(isActive && 'active')}>
+                网盘
+              </NavLink>
+              <NavLink to="/jobs" className={({ isActive }) => cx(isActive && 'active')}>
+                任务
+                {runningCount > 0 && (
+                  <span className="num rounded-full bg-[#4d8bff] px-1.5 text-[11px] leading-[17px] text-white">
+                    {runningCount}
+                  </span>
+                )}
+              </NavLink>
+              <NavLink to="/overview" className={({ isActive }) => cx(isActive && 'active')}>
+                总览
+              </NavLink>
+              <NavLink to="/settings" className={({ isActive }) => cx(isActive && 'active')}>
+                设置
+              </NavLink>
+            </nav>
           </div>
         </div>
-        <nav className="flex flex-col gap-0.5 px-3">
-          {NAV.map(n => (
-            <NavLink key={n.to} to={n.to} end={n.end}
-              className={({ isActive }) => cx('flex items-center gap-3 rounded-lg px-3 py-2 text-[14px] transition-colors',
-                isActive ? 'bg-white/10 text-white' : 'text-white/60 hover:bg-white/5 hover:text-white')}>
-              <n.icon size={17} strokeWidth={1.8} />
-              <span className="flex-1">{n.label}</span>
-              {n.to === '/jobs' && running > 0 && <span className="num rounded-full bg-[#6E98FF] px-1.5 text-[11px] leading-[18px] text-shell">{running}</span>}
-            </NavLink>
-          ))}
-        </nav>
+      </header>
 
-        <div className="mt-auto space-y-3 px-5 pb-5 text-[12px]">
-          {q?.total ? (
-            <div>
-              <div className="mb-1.5 flex justify-between text-white/55"><span>网盘剩余</span><span className="num text-white">{bytes(q.free)}</span></div>
-              <Bar value={q.used} max={q.total} color={q.free < 300 * 1024 ** 3 ? 'bg-[#FF8A75]' : 'bg-[#6E98FF]'} className="bg-white/10" />
-            </div>
-          ) : null}
-          <div className="flex items-center gap-2 text-white/55">
-            <span className={cx('size-2 rounded-full', connected ? 'bg-[#4FD1A5]' : 'bg-[#FF8A75] pulse')} />
-            {connected ? '已连接服务' : '正在重连服务…'}
-          </div>
-          {acc && (
-            <div className="flex items-center gap-2 text-white/55">
-              {acc.user?.avatar && <img src={acc.user.avatar} alt="" className="size-5 rounded-full" referrerPolicy="no-referrer" />}
-              <span className="truncate">{acc.transfer_login.ok ? acc.transfer_login.name : <span className="text-[#FF8A75]">网盘未登录</span>}</span>
-            </div>
-          )}
-        </div>
-      </aside>
+      <main className="stage flex-1 w-full">
+        <Outlet />
+      </main>
 
-      <div className="min-w-0 flex-1">
-        <nav className="flex gap-1 overflow-x-auto bg-shell px-3 py-2 md:hidden">
-          {NAV.map(n => (
-            <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => cx('rounded-md px-3 py-1.5 text-[13px] whitespace-nowrap', isActive ? 'bg-white/12 text-white' : 'text-white/60')}>{n.label}</NavLink>
-          ))}
-        </nav>
-        <main className="mx-auto max-w-[1280px] px-6 py-7 max-md:px-4">
-          <Outlet />
-        </main>
-      </div>
+      {primaryJob && <ActiveJobDock job={primaryJob} queueCount={activeJobs.length} />}
 
       <div className="fixed right-5 bottom-5 z-40 flex w-[340px] flex-col gap-2" aria-live="polite">
         {toasts.map(t => {
           const Icon = { error: CircleAlert, warn: TriangleAlert, success: CircleCheck, info: Info }[t.level] || Info;
           const color = { error: 'text-bad', warn: 'text-warn', success: 'text-ok', info: 'text-signal' }[t.level];
           return (
-            <div key={t.id} className="panel flex gap-3 p-3 shadow-lg">
+            <div key={t.id} className="panel flex gap-3 p-3 shadow-2xl">
               <Icon size={18} className={cx('mt-0.5 shrink-0', color)} />
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-medium">{t.title}</div>
                 {t.body && <div className="mt-0.5 text-xs text-muted">{t.body}</div>}
               </div>
-              <button className="btn btn-ghost btn-sm -mr-1 -mt-1" onClick={() => dismiss(t.id)} aria-label="关闭"><X size={14} /></button>
+              <button className="btn btn-ghost btn-sm -mr-1 -mt-1" onClick={() => dismiss(t.id)} aria-label="关闭">
+                <X size={14} />
+              </button>
             </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+function ActiveJobDock({ job, queueCount }: { job: Job; queueCount: number }) {
+  const p = useLiveProgress(job);
+  const act = useJobAction();
+  const done = p.done ?? 0;
+  const total = p.total ?? 0;
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const phaseLabel = PHASE[p.phase || ''] || job.label;
+
+  return (
+    <aside className="dock" aria-live="polite">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-3 text-[13px]">
+          <Link to={`/jobs/${job.id}`} className="truncate font-semibold hover:underline">
+            {job.label} · {phaseLabel}
+            {p.current ? <span className="ml-1.5 font-normal text-muted">{p.current}</span> : null}
+          </Link>
+          <span className="num shrink-0 text-xs text-muted">
+            {total > 0 ? `${done} / ${total} (${pct}%)` : job.status === 'paused' ? '已暂停' : '运行中'}
+            {queueCount > 1 ? ` · 共 ${queueCount} 项任务` : ''}
+          </span>
+        </div>
+        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-[#131a27]">
+          <div
+            className={cx(
+              'h-full rounded-full bg-[#4d8bff] transition-[width] duration-300',
+              job.status === 'running' && total === 0 && 'w-1/3 animate-pulse'
+            )}
+            style={total > 0 ? { width: `${pct}%` } : undefined}
+          />
+        </div>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        {job.status === 'running' && (
+          <button
+            className="btn btn-sm"
+            onClick={() => act.mutate({ id: job.id, action: 'pause' })}
+            disabled={act.isPending}
+            title="暂停任务"
+          >
+            <Pause size={12} />暂停
+          </button>
+        )}
+        {job.status === 'paused' && (
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={() => act.mutate({ id: job.id, action: 'resume' })}
+            disabled={act.isPending}
+            title="继续任务"
+          >
+            <Play size={12} />继续
+          </button>
+        )}
+        <button
+          className="btn btn-sm btn-danger"
+          onClick={() => confirm(`确定取消「${job.label}」任务？`) && act.mutate({ id: job.id, action: 'cancel' })}
+          disabled={act.isPending}
+          title="取消任务"
+        >
+          <Square size={11} />取消
+        </button>
+      </div>
+    </aside>
   );
 }

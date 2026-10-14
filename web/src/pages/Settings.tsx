@@ -60,8 +60,8 @@ export function SettingsPage() {
       </div>
 
       {(dirty || save.error) && (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-panel/95 backdrop-blur md:left-[208px]">
-          <div className="mx-auto flex max-w-[1280px] items-center justify-between gap-3 px-6 py-3">
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-panel/95 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-[var(--stage-max)] items-center justify-between gap-3 px-[var(--stage-pad)] py-3">
             <div className="text-[13px]">{save.error ? <span className="text-bad">{(save.error as Error).message}</span> : '有未保存的修改，保存后立即生效（进行中的任务从下一步开始使用新参数）'}</div>
             <div className="flex gap-2">
               <button className="btn" onClick={() => { setDraft(structuredClone(data!.settings)); save.reset(); }}>放弃修改</button>

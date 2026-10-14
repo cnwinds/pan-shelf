@@ -80,10 +80,41 @@ export interface Account {
 }
 export interface LoginState { status: 'idle' | 'starting' | 'waiting' | 'success' | 'failed' | 'cancelled'; message: string; at: string | null }
 
+export type PanState = 'in_pan' | 'queued' | 'available' | 'pending_detail' | 'failed' | 'no_link';
+
 export interface GameLink { surl: string; pwd: string; status: string; attempts: number; last_error: string | null; dest_dir: string | null; transferred_at: string | null; remark: string | null; format: 'exfat' | 'folder' | 'pkg' | 'unknown' | null }
 export interface Game {
-  source_id: string; post_id: string; url: string; title: string | null; serial: string | null; status: string; fail_count: number;
-  last_error: string | null; discovered_at: string; crawled_at: string | null; links: GameLink[];
+  source_id: string;
+  post_id: string;
+  url: string;
+  title: string | null;
+  serial: string | null;
+  status: string;
+  fail_count: number;
+  last_error: string | null;
+  discovered_at: string;
+  crawled_at: string | null;
+  links: GameLink[];
+  // Enriched catalog & store metadata fields
+  concept_id?: number;
+  platform?: 'PS5' | 'PS4' | string;
+  region?: string;
+  display_name?: string;
+  auto_name?: string;
+  custom_name?: string;
+  cn_title?: string;
+  en_title?: string;
+  store_name?: string;
+  catalog_name?: string;
+  cover_url?: string;
+  has_cached_cover?: boolean;
+  publisher?: string;
+  genres?: string;
+  release_date?: string;
+  description?: string;
+  meta_state?: 'ready' | 'pending' | 'missing';
+  pan_state?: PanState;
+  pan_size?: number | null;
 }
 
 export interface Settings {

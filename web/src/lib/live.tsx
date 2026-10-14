@@ -94,6 +94,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     on('login', () => invalidate('account'));
     on('account-changed', () => invalidate('account', 'overview'));
     on('settings', () => invalidate('settings', 'overview'));
+    on('meta', () => invalidate('game-detail'));
     return () => es.close();
   }, [qc]);
 
