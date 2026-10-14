@@ -212,56 +212,11 @@ export function Games() {
 
   return (
     <>
-      <header className="library-head">
-        <div className="min-w-0">
-          <h1>
-            游戏库 <span className="count">{total}</span>
-          </h1>
-          <p className="lede">
-            <span className="lede-legend">
-              <i className="legend-dot bright" />
-              亮色封面表示已在网盘
-            </span>
-            {acc?.quota?.free != null && (
-              <>
-                <span className="lede-sep" />
-                <span>
-                  网盘剩余 <strong className="num text-ink">{bytes(acc.quota.free)}</strong>
-                </span>
-              </>
-            )}
-          </p>
-        </div>
-
-        <div className="library-actions">
-          {failedCount > 0 && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => action.mutate({ action: 'retry_failed' })}
-              disabled={action.isPending}
-              title="重试所有抓取失败或转存失败的游戏"
-            >
-              <RotateCcw size={13} />
-              重试失败 <span className="num opacity-70">{failedCount}</span>
-            </button>
-          )}
-          <button
-            type="button"
-            className={cx('btn btn-sm', batchMode && 'btn-primary')}
-            onClick={() => {
-              setBatchMode(v => !v);
-              setSelected(new Set());
-            }}
-          >
-            <CheckSquare size={14} />
-            {batchMode ? '退出批量' : '批量管理'}
-          </button>
-        </div>
-      </header>
-
       <div className="library-toolbar">
         <div className="toolbar-group">
+          <h1 className="library-title">
+            游戏库 <span className="count">{total}</span>
+          </h1>
           {sources && sources.length > 1 && (
             <Dropdown
               className="dropdown-field"
@@ -338,6 +293,32 @@ export function Games() {
             ariaLabel="排序方式"
             options={SORT_OPTIONS}
           />
+
+          <span className="toolbar-divider" aria-hidden="true" />
+
+          {failedCount > 0 && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => action.mutate({ action: 'retry_failed' })}
+              disabled={action.isPending}
+              title="重试所有抓取失败或转存失败的游戏"
+            >
+              <RotateCcw size={13} />
+              重试失败 <span className="num opacity-70">{failedCount}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            className={cx('btn btn-sm toolbar-btn', batchMode && 'btn-primary')}
+            onClick={() => {
+              setBatchMode(v => !v);
+              setSelected(new Set());
+            }}
+          >
+            <CheckSquare size={14} />
+            {batchMode ? '退出批量' : '批量管理'}
+          </button>
         </div>
       </div>
 
