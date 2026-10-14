@@ -543,8 +543,7 @@
   border-radius: 9px;
 }
 
-.filters button,
-.filters-more {
+.filters button {
   height: 28px;
   padding: 0 0.8rem;
   border: 0;
@@ -558,12 +557,11 @@
   gap: 0.4rem;
   transition: background 0.14s, color 0.14s;
 }
-.filters button:hover,
-.filters-more:hover {
+.filters button:hover {
   color: var(--text);
 }
 .filters button.on,
-.filters-more.on {
+.filters-more.on .dropdown-trigger {
   background: var(--raise);
   color: var(--text);
   font-weight: 600;
@@ -578,33 +576,15 @@
   color: var(--muted);
 }
 
-/* 分段里的「更多状态」与排序：原生 select 去掉外观，叠一个箭头图标 */
+/* 分段里的「更多状态」：最后一段，左侧一条细分隔线 */
 .filters-more {
-  position: relative;
-  padding-right: 0.55rem;
+  display: flex;
+  padding-left: 2px;
+  margin-left: 1px;
   border-left: 1px solid var(--line);
-  border-radius: 0 6px 6px 0;
 }
 .filters-more.on {
   border-left-color: transparent;
-  border-radius: 6px;
-}
-.filters-more select,
-.sort-select select,
-.toolbar-select {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  outline: none;
-}
-.filters-more select option,
-.sort-select select option,
-.toolbar-select option {
-  background: var(--deck);
-  color: var(--text);
 }
 
 .chip-toggle {
@@ -631,27 +611,97 @@
   background: rgba(77, 139, 255, 0.12);
 }
 
-.sort-select,
-.toolbar-select {
+/* 自定义下拉框（components/Dropdown.tsx） */
+.dropdown {
+  position: relative;
+}
+.dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dropdown-icon {
+  display: inline-flex;
+  color: var(--faint);
+}
+.dropdown-caret {
+  color: var(--faint);
+  transition: transform 0.16s;
+}
+.dropdown.is-open .dropdown-caret {
+  transform: rotate(180deg);
+}
+
+/* 独立的下拉框外观（排序、来源） */
+.dropdown-field .dropdown-trigger {
   height: 30px;
-  padding: 0 0.6rem;
+  padding: 0 0.6rem 0 0.7rem;
   border-radius: 8px;
   border: 1px solid var(--line);
   background: var(--deck);
   color: var(--text);
   font-size: 0.8rem;
-  display: inline-flex;
+  transition: border-color 0.14s;
+}
+.dropdown-field .dropdown-trigger:hover,
+.dropdown-field.is-open .dropdown-trigger {
+  border-color: #3b475e;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 100%;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #161d2a;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  animation: dropdown-in 0.12s ease-out;
+}
+.dropdown-menu.align-right {
+  left: auto;
+  right: 0;
+}
+@keyframes dropdown-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.dropdown-menu li {
+  display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.45rem;
+  padding: 0.42rem 0.7rem 0.42rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
   cursor: pointer;
 }
-.sort-select > svg {
-  color: var(--faint);
-  flex-shrink: 0;
+.dropdown-menu li.active {
+  background: var(--raise);
+  color: var(--text);
 }
-.sort-select:hover,
-.toolbar-select:hover {
-  border-color: #3b475e;
+.dropdown-menu li.selected {
+  color: #8fb6ff;
+}
+.dropdown-check {
+  display: inline-flex;
+  width: 14px;
+  justify-content: center;
+}
+.dropdown-hint {
+  margin-left: 1rem;
+  font-family: var(--num);
+  font-size: 0.74rem;
+  color: var(--faint);
 }
 
 /* =========================================================

@@ -18,10 +18,10 @@ import {
   SkipForward,
   Undo2,
   ArrowUpDown,
-  ChevronDown,
 } from 'lucide-react';
 import { api, type Game, type Job, type PanState, type RemovalPreview } from '../lib/api';
 import { useAccount, useSetup, useSources } from '../lib/hooks';
+import { Dropdown } from '../components/Dropdown';
 import { Chip, Empty, ErrorNote, Modal, cx, linkStatus } from '../components/ui';
 import { bytes, dateTime } from '../lib/format';
 
@@ -30,6 +30,15 @@ const PRIMARY_FILTERS: { id: string; label: string }[] = [
   { id: 'transferred', label: '已入盘' },
   { id: 'pending_transfer', label: '转存中' },
   { id: 'available', label: '未入盘' },
+];
+
+const SORT_OPTIONS = [
+  { value: 'pan_first', label: '已入盘优先' },
+  { value: 'newest', label: '最新收录' },
+  { value: 'updated', label: '最近更新' },
+  { value: 'rating', label: '评分最高' },
+  { value: 'release', label: '发售日期（新→旧）' },
+  { value: 'title', label: '按名称' },
 ];
 
 const EXTRA_FILTERS: { id: string; label: string }[] = [
@@ -254,18 +263,13 @@ export function Games() {
       <div className="library-toolbar">
         <div className="toolbar-group">
           {sources && sources.length > 1 && (
-            <select
-              className="toolbar-select"
+            <Dropdown
+              className="dropdown-field"
               value={sourceId}
-              onChange={e => updateParams({ source: e.target.value })}
-              aria-label="选择来源"
-            >
-              {sources.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+              onChange={v => updateParams({ source: v })}
+              options={sources.map(s => ({ value: s.id, label: s.name }))}
+              ariaLabel="选择来源"
+            />
           )}
 
           <div className="filters" role="tablist" aria-label="网盘状态筛选">
@@ -287,21 +291,17 @@ export function Games() {
                 </button>
               );
             })}
-            <label className={cx('filters-more', isExtraView && 'on')}>
-              <select
-                value={isExtraView ? view : ''}
-                onChange={e => updateParams({ view: e.target.value || null })}
-                aria-label="更多状态筛选"
-              >
-                <option value="">更多状态</option>
-                {EXTRA_FILTERS.map(f => (
-                  <option key={f.id} value={f.id}>
-                    {f.label}（{facets.data?.[f.id] ?? 0}）
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={13} aria-hidden="true" />
-            </label>
+            <Dropdown
+              className={cx('filters-more', isExtraView && 'on')}
+              value={isExtraView ? view : ''}
+              onChange={v => updateParams({ view: v || null })}
+              placeholder="更多状态"
+              ariaLabel="更多状态筛选"
+              options={[
+                ...(isExtraView ? [{ value: '', label: '全部状态' }] : []),
+                ...EXTRA_FILTERS.map(f => ({ value: f.id, label: f.label, hint: facets.data?.[f.id] ?? 0 })),
+              ]}
+            />
           </div>
         </div>
 
@@ -329,22 +329,15 @@ export function Games() {
 
           <span className="toolbar-divider" aria-hidden="true" />
 
-          <label className="sort-select">
-            <ArrowUpDown size={13} aria-hidden="true" />
-            <select
-              value={sort}
-              onChange={e => updateParams({ sort: e.target.value === 'pan_first' ? null : e.target.value })}
-              aria-label="排序方式"
-            >
-              <option value="pan_first">已入盘优先</option>
-              <option value="newest">最新收录</option>
-              <option value="updated">最近更新</option>
-              <option value="rating">评分最高</option>
-              <option value="release">发售日期（新→旧）</option>
-              <option value="title">按名称</option>
-            </select>
-            <ChevronDown size={13} aria-hidden="true" />
-          </label>
+          <Dropdown
+            className="dropdown-field"
+            align="right"
+            icon={<ArrowUpDown size={13} />}
+            value={sort}
+            onChange={v => updateParams({ sort: v === 'pan_first' ? null : v })}
+            ariaLabel="排序方式"
+            options={SORT_OPTIONS}
+          />
         </div>
       </div>
 
