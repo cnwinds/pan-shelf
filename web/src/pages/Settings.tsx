@@ -624,7 +624,7 @@ function Sources() {
           <div key={s.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2"><span className="font-medium">{s.name}</span>{!s.enabled && <span className="chip bg-line-2 text-muted">已停用</span>}</div>
-              <div className="mt-0.5 text-xs text-muted">{s.base_url}{s.category_path} → 网盘 {s.dest_dir}</div>
+              <div className="mt-0.5 text-xs text-muted">{s.base_url}{s.category_path} → <Link to="/settings/dest" className="hover:text-ink hover:underline" title="修改转存目录">网盘 {s.dest_dir}</Link></div>
               {s.stats && <div className="mt-0.5 text-xs text-muted">{s.stats.posts.total} 个游戏，{s.stats.games?.in_pan ?? s.stats.links.saved + s.stats.links.exists} 个已入盘</div>}
             </div>
             <div className="flex gap-1.5">
@@ -665,11 +665,11 @@ function SourceDialog({ initial, onClose }: { initial: Partial<Source>; onClose:
         <Field label="ID" hint={isNew ? '小写字母、数字和连字符，创建后不能修改' : undefined}><input className="field font-mono" value={f.id || ''} disabled={!isNew} onChange={e => set({ id: e.target.value })} placeholder="2468c-ps4" /></Field>
         <Field label="站点地址"><input className="field" value={f.base_url || ''} onChange={e => set({ base_url: e.target.value })} placeholder="https://2468c.com" /></Field>
         <Field label="分类路径"><input className="field" value={f.category_path || ''} onChange={e => set({ category_path: e.target.value })} placeholder="/ps4game" /></Field>
-        <div className="sm:col-span-2">
-          {isNew
-            ? <Field label="转存到网盘目录" hint="游戏会存进这个目录，游戏库也按它判断哪些已入盘。不存在时会自动创建，以后可在「设置 → 转存目录」修改。"><input className="field" value={f.dest_dir || ''} onChange={e => set({ dest_dir: e.target.value })} placeholder="/游戏资源/PS4" /></Field>
-            : <Field label="转存到网盘目录" hint={<>修改请到 <Link className="underline" to="/settings/dest" onClick={onClose}>设置 → 转存目录</Link>，可以把已入盘的游戏一起搬过去</>}><input className="field" value={f.dest_dir || ''} disabled /></Field>}
-        </div>
+        {isNew && (
+          <div className="sm:col-span-2">
+            <Field label="转存到网盘目录" hint="游戏会存进这个目录，游戏库也按它判断哪些已入盘。不存在时会自动创建，以后可在「设置 → 转存目录」修改。"><input className="field" value={f.dest_dir || ''} onChange={e => set({ dest_dir: e.target.value })} placeholder="/游戏资源/PS4" /></Field>
+          </div>
+        )}
         <Field label="站点类型">
           <select className="field" value={f.adapter} onChange={e => set({ adapter: e.target.value })}>
             <option value="wp2468c">WordPress 分类（2468c 等）</option>
