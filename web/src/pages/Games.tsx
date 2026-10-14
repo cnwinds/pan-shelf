@@ -1141,7 +1141,7 @@ function RemoveDialog({
         onDone(`已将 ${r.reset || postIds.length} 款游戏标记回「未入盘」（暗色状态）`);
       } else if (r.job) {
         onDone(
-          `退出网盘任务 #${r.job.id} 已启动，网盘文件将移入百度网盘回收站，游戏恢复为暗色「未入盘」状态`
+          `退出网盘任务 #${r.job.id} 已启动，网盘文件将移入百度网盘回收站（要求安全验证时移到 /盘架待删除），游戏恢复为暗色「未入盘」状态`
         );
       } else {
         onDone('已退出网盘并恢复为「未入盘」状态');
@@ -1198,6 +1198,7 @@ function RemoveDialog({
           <p className="text-muted">
             按游戏编号（Title ID）在网盘目录中找到以下文件夹。确认后将从网盘删除并移入百度网盘回收站；游戏本身仍保留在封面墙上并变为
             <strong className="text-ink">暗色（未入盘）</strong>，以后随时可以再次加入网盘。
+            如果百度要求安全验证、不能直接删除，会改为移到网盘根目录的 <span className="font-mono">/盘架待删除</span>，需要你在百度网盘 App 里删除它才会释放空间。
           </p>
           <div className="max-h-[48vh] space-y-2 overflow-auto pr-1">
             {list.map(g => (

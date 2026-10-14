@@ -93,7 +93,7 @@ defineJob('remove', {
     await requireLogin(ctx);
     const games = await resolveRemoval(src.id, ctx.job.params.post_ids || [], { sizes: false });
     const sizeOf = (t) => one('SELECT size FROM du_results WHERE path = ?', t.path)?.size ?? t.size ?? 0;
-    let removed = 0, failed = 0, bytes = 0;
+    let removed = 0, failed = 0, bytes = 0, trashed = 0, trashedBytes = 0;
     const done = [];
     for (let i = 0; i < games.length; i++) {
       await ctx.checkpoint();
@@ -104,10 +104,17 @@ defineJob('remove', {
       let ok = g.targets.length > 0;
       for (const t of g.targets) {
         const size = sizeOf(t);
-        if (await bd.rm([t.path], ctx.signal)) {
-          bytes += size;
+        const r = await bd.rm([t.path], ctx.signal);
+        if (r) {
           exec('DELETE FROM du_results WHERE path = ? OR path LIKE ?', t.path, t.path + '/%');
-          ctx.log(`已删除 ${t.isdir ? '[目录] ' : ''}${t.name}${size ? '  ' + fmtBytes(size) : ''}`);
+          const what = `${t.isdir ? '[目录] ' : ''}${t.name}${size ? '  ' + fmtBytes(size) : ''}`;
+          if (r === 'trashed') {
+            trashed++; trashedBytes += size;
+            ctx.log('warn', `百度要求安全验证、不能直接删除，已移到 ${bd.TRASH_DIR}：${what}`);
+          } else {
+            bytes += size;
+            ctx.log(`已删除 ${what}`);
+          }
         } else { ok = false; failed++; ctx.log('warn', `删除失败 ${t.path}`); }
         await ctx.sleep(getSettings().normalize.op_interval_ms);
       }
@@ -115,11 +122,15 @@ defineJob('remove', {
       if (ok || g.missing) { resetLinks(src.id, g.post_id); removed++; done.push(g.title); }
     }
     ctx.progress({ phase: 'done', done: games.length, total: games.length, current: null });
-    ctx.log(`完成：${removed} 个游戏已移出网盘，释放约 ${fmtBytes(bytes)}${failed ? `，${failed} 项删除失败` : ''}`);
-    return { games: removed, failed, bytes, titles: done.slice(0, 5) };
+    ctx.log(`完成：${removed} 个游戏已移出网盘${bytes ? `，释放约 ${fmtBytes(bytes)}` : ''}${trashed ? `；${trashed} 项${trashedBytes ? `（约 ${fmtBytes(trashedBytes)}）` : ''}在 ${bd.TRASH_DIR}，请在百度网盘 App 里删除这个目录释放空间` : ''}${failed ? `，${failed} 项删除失败` : ''}`);
+    return { games: removed, failed, bytes, trashed, trashed_bytes: trashedBytes, titles: done.slice(0, 5) };
   },
   onDone(job, s) {
-    if (s?.games) notify('run_done', s.failed ? 'warn' : 'success', `已从网盘删除 ${s.games} 个游戏`, `释放约 ${fmtBytes(s.bytes)}：${s.titles.join('、')}${s.games > 5 ? ' 等' : ''}`);
+    if (!s?.games) return;
+    const list = `${s.titles.join('、')}${s.games > 5 ? ' 等' : ''}`;
+    if (s.trashed) notify('run_done', 'warn', `已移出网盘 ${s.games} 个游戏，需要你手动清空`,
+      `百度要求安全验证，接口不能直接删除，${list} 已移到 ${bd.TRASH_DIR}${s.trashed_bytes ? `（约 ${fmtBytes(s.trashed_bytes)}）` : ''}。在百度网盘 App 里删除这个目录才会释放空间。`);
+    else notify('run_done', s.failed ? 'warn' : 'success', `已从网盘删除 ${s.games} 个游戏`, `${s.bytes ? `释放约 ${fmtBytes(s.bytes)}：` : ''}${list}`);
   },
   onFail(job, e) { notify('error', 'error', '从网盘删除失败', e.message); },
 });

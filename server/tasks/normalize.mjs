@@ -167,7 +167,7 @@ defineJob('normalize_exec', {
           const step = g.steps.find(s => s.from === name);
           if (step && (step.op === 'move_file' || step.op === 'delete_dup')) {
             if (tnames.has(name.toLowerCase())) {
-              const ok = await bd.rm([srcPath], ctx.signal);
+              const ok = !!(await bd.rm([srcPath], ctx.signal));
               ops.push({ op: 'delete_dup', from: name, ok });
               ctx.log(`判重删除 ${name}`);
             } else {
@@ -195,7 +195,7 @@ defineJob('normalize_exec', {
           await ctx.sleep(800);
           const after = await bd.listDir(srcPath);
           let removed = false;
-          if (after && after.length === 0) removed = await bd.rm([srcPath], ctx.signal);
+          if (after && after.length === 0) removed = !!(await bd.rm([srcPath], ctx.signal));
           ops.push({ op: 'merge', from: name, moved, dedup, fails, removed, left: after ? after.length : null, ok: removed && !fails });
           ctx.log(removed && !fails ? 'info' : 'warn',
             `合并 ${name} → ${g.target}：移入 ${moved}，判重删除 ${dedup}${fails ? `，失败 ${fails}` : ''}${removed ? '，源目录已删除' : `，源目录未删除（剩余 ${after ? after.length : '?'} 项）`}`);

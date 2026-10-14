@@ -194,8 +194,12 @@ async function fileManager(opera, filelist, { timeoutSec = 180, signal } = {}) {
     timeoutSec,
     signal,
   });
-  return j.errno === 0 && (j.info || []).every(x => !x.errno);
+  return { ok: j.errno === 0 && (j.info || []).every(x => !x.errno), errno: j.errno };
 }
+
+// 百度风控要求安全验证时（errno 132，网页版会弹短信验证）接口删不掉文件，移动/改名不受影响
+const NEED_VERIFY = 132;
+export const TRASH_DIR = '/盘架待删除';
 
 const splitPath = (p) => {
   const i = p.lastIndexOf('/');
@@ -216,12 +220,24 @@ async function guardedWrite(fn, signal) {
 // dst 是完整目标路径（可同时改名）；目标已存在时失败
 export async function mv(src, dst, signal) {
   const { dir, name } = splitPath(dst);
-  return guardedWrite(() => fileManager('move', [{ path: src, dest: dir, newname: name }], { signal }), signal);
+  return guardedWrite(async () => (await fileManager('move', [{ path: src, dest: dir, newname: name }], { signal })).ok, signal);
 }
 
-// 路径不存在也视为删除成功
+// 返回 'deleted' | 'trashed' | false；删除被安全验证拦下时改为移进 TRASH_DIR，等你在网盘 App 里清空
 export async function rm(paths, signal) {
-  return guardedWrite(() => fileManager('delete', paths, { signal }), signal);
+  return guardedWrite(async () => {
+    const r = await fileManager('delete', paths, { signal });
+    if (r.ok) return 'deleted';
+    if (r.errno !== NEED_VERIFY) return false;
+    await mkdirRaw(TRASH_DIR, signal);
+    for (const p of paths) {
+      const name = p.slice(p.lastIndexOf('/') + 1);
+      let m = await fileManager('move', [{ path: p, dest: TRASH_DIR, newname: name }], { signal });
+      if (!m.ok) m = await fileManager('move', [{ path: p, dest: TRASH_DIR, newname: `${name} (${Date.now()})` }], { signal });
+      if (!m.ok) return false;
+    }
+    return 'trashed';
+  }, signal);
 }
 
 async function mkdirRaw(dir, signal) {
