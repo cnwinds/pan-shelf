@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, Check, Folder, Play, Plus, Trash2, Pencil, QrCode, RefreshCw, RotateCcw, Send, Sparkles, TriangleAlert, X } from 'lucide-react';
+import { ArrowRight, Check, ChevronLeft, Folder, Play, Plus, Trash2, Pencil, QrCode, RefreshCw, RotateCcw, Send, Sparkles, TriangleAlert, X } from 'lucide-react';
 import { api, type Settings, type Source } from '../lib/api';
 import { useAccount, useOverview, useSettings, useSetup, useSources } from '../lib/hooks';
 import { ErrorNote, Field, Modal, PageHeader, Toggle, cx } from '../components/ui';
@@ -42,20 +42,28 @@ export function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="设置" />
+      {tab === 'start'
+        ? <PageHeader title="设置" />
+        : (
+          <div className="mb-4 md:hidden">
+            <Link to="/settings" className="inline-flex items-center gap-1 text-[13px] text-muted hover:text-ink"><ChevronLeft size={16} />设置</Link>
+            <h1 className="mt-1 font-display text-[22px] font-semibold">{[...REQUIRED, ...OPTIONAL].find(t => t.id === tab)?.label}</h1>
+          </div>
+        )}
+      {tab !== 'start' && <div className="max-md:hidden"><PageHeader title="设置" /></div>}
       <div className="grid gap-6 md:grid-cols-[190px_minmax(0,1fr)]">
-        <nav className="flex gap-1 md:flex-col max-md:overflow-x-auto">
+        <nav className="flex flex-col gap-1 max-md:hidden">
           <Link to="/settings" className={navCls(tab === 'start')}>
             <Sparkles size={14} className="text-signal" />快速开始
             {setup.ready && !setup.done && <span className="num ml-auto rounded-full bg-warn-soft px-1.5 text-[11px] text-warn">{setup.count}/3</span>}
           </Link>
-          <div className="mt-3 mb-1 px-3 text-[11px] font-medium tracking-wide text-muted max-md:hidden">必需设置</div>
+          <div className="mt-3 mb-1 px-3 text-[11px] font-medium tracking-wide text-muted">必需设置</div>
           {REQUIRED.map((t, i) => (
             <Link key={t.id} to={`/settings/${t.id}`} className={navCls(tab === t.id)}>
               <StepDot n={i + 1} done={setup.steps[t.id]} pending={setup.ready} />{t.label}
             </Link>
           ))}
-          <div className="mt-3 mb-1 px-3 text-[11px] font-medium tracking-wide text-muted max-md:hidden">可选 · 默认即可用</div>
+          <div className="mt-3 mb-1 px-3 text-[11px] font-medium tracking-wide text-muted">可选 · 默认即可用</div>
           {OPTIONAL.map(t => (
             <Link key={t.id} to={`/settings/${t.id}`} className={navCls(tab === t.id)}>
               {t.label}
@@ -84,8 +92,8 @@ export function SettingsPage() {
       </div>
 
       {(dirty || save.error) && (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-panel/95 backdrop-blur">
-          <div className="mx-auto flex w-full max-w-[var(--stage-max)] items-center justify-between gap-3 px-[var(--stage-pad)] py-3">
+        <div className="fixed inset-x-0 bottom-[var(--bottom-nav)] z-30 border-t border-line bg-panel/95 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-[var(--stage-max)] flex-wrap items-center justify-between gap-3 px-[var(--stage-pad)] py-3">
             <div className="text-[13px]">{save.error ? <span className="text-bad">{(save.error as Error).message}</span> : '有未保存的修改，保存后立即生效（进行中的任务从下一步开始使用新参数）'}</div>
             <div className="flex gap-2">
               <button className="btn" onClick={() => { setDraft(structuredClone(data!.settings)); save.reset(); }}>放弃修改</button>
@@ -161,14 +169,14 @@ function SetupGuide() {
             const blocked = t.id === 'dest' && !steps.sources;
             const isNext = !done && REQUIRED.findIndex(x => !steps[x.id]) === i;
             return (
-              <li key={t.id} className={cx('flex flex-wrap items-start gap-4 rounded-lg border p-4', isNext ? 'border-signal bg-signal-soft/40' : 'border-line')}>
+              <li key={t.id} className={cx('grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-3 rounded-lg border p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto]', isNext ? 'border-signal bg-signal-soft/40' : 'border-line')}>
                 <StepDot n={i + 1} done={done} pending={setup.ready} size={26} />
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0">
                   <div className="font-medium">{t.title}</div>
                   <p className="mt-0.5 text-[13px] text-muted">{status[t.id].desc}</p>
                   <div className={cx('mt-1.5 text-[13px]', done ? 'text-ok' : 'text-warn')}>{status[t.id].value}</div>
                 </div>
-                <Link to={blocked ? '/settings/sources' : `/settings/${t.id}`} className={cx('btn btn-sm self-center', isNext && 'btn-primary')}>
+                <Link to={blocked ? '/settings/sources' : `/settings/${t.id}`} className={cx('btn btn-sm col-start-2 justify-self-start sm:col-start-3 sm:self-center', isNext && 'btn-primary')}>
                   {blocked ? '先添加来源' : status[t.id].action}<ArrowRight size={12} />
                 </Link>
               </li>

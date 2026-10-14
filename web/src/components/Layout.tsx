@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { X, CircleAlert, CircleCheck, Info, TriangleAlert, Pause, Play, Square } from 'lucide-react';
+import { X, CircleAlert, CircleCheck, Info, TriangleAlert, Pause, Play, Square, LayoutGrid, HardDrive, ListChecks, Gauge, Settings as SettingsIcon } from 'lucide-react';
 import { useLive, useLiveProgress } from '../lib/live';
 import { useAccount, useJobAction, useOverview, useSetup } from '../lib/hooks';
 import { bytes } from '../lib/format';
@@ -115,24 +115,24 @@ export function Layout() {
 
             <nav className="tabs" aria-label="主导航">
               <NavLink to="/" end className={() => cx(isLibrary && 'active')}>
-                游戏库
+                <LayoutGrid size={20} />游戏库
               </NavLink>
               <NavLink to="/storage" className={({ isActive }) => cx(isActive && 'active')}>
-                网盘
+                <HardDrive size={20} />网盘
               </NavLink>
               <NavLink to="/jobs" className={({ isActive }) => cx(isActive && 'active')}>
-                任务
+                <ListChecks size={20} />任务
                 {runningCount > 0 && (
-                  <span className="num rounded-full bg-[#4d8bff] px-1.5 text-[11px] leading-[17px] text-white">
+                  <span className="tab-badge num rounded-full bg-[#4d8bff] px-1.5 text-[11px] leading-[17px] text-white">
                     {runningCount}
                   </span>
                 )}
               </NavLink>
               <NavLink to="/overview" className={({ isActive }) => cx(isActive && 'active')}>
-                总览
+                <Gauge size={20} />总览
               </NavLink>
               <NavLink to="/settings" className={({ isActive }) => cx(isActive && 'active')}>
-                设置
+                <SettingsIcon size={20} />设置
               </NavLink>
             </nav>
           </div>
@@ -145,7 +145,7 @@ export function Layout() {
 
       {primaryJob && <ActiveJobDock job={primaryJob} queueCount={activeJobs.length} />}
 
-      <div className="fixed right-5 bottom-5 z-40 flex w-[340px] flex-col gap-2" aria-live="polite">
+      <div className="toasts fixed z-40 flex flex-col gap-2" aria-live="polite">
         {toasts.map(t => {
           const Icon = { error: CircleAlert, warn: TriangleAlert, success: CircleCheck, info: Info }[t.level] || Info;
           const color = { error: 'text-bad', warn: 'text-warn', success: 'text-ok', info: 'text-signal' }[t.level];
