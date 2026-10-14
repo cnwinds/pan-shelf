@@ -67,8 +67,14 @@ function gamesQuery(q) {
       args.push(`%${kw}%`, `%${kw}%`, kw, `%${kw.replace(/[-_\s]/g, '')}%`, `%${kw}%`, `%${kw}%`);
     }
   }
+  if (q.cn === '1') where.push('EXISTS (SELECT 1 FROM store_meta sm WHERE sm.concept_id = p.concept_id AND (sm.has_cn_sub = 1 OR sm.has_cn_voice = 1))');
+  if (q.multi === '1') where.push('EXISTS (SELECT 1 FROM store_meta sm WHERE sm.concept_id = p.concept_id AND sm.players >= 2)');
   return { w: where.join(' AND '), args };
 }
+
+// 评分人数少于这个数的游戏，评分排序时排在有足够评分的游戏后面
+const MIN_RATINGS = 20;
+const SM = (col) => `(SELECT sm.${col} FROM store_meta sm WHERE sm.concept_id = p.concept_id)`;
 
 function buildPanInventory(source_id) {
   const bySerial = new Map();
@@ -176,6 +182,9 @@ function listGames(q) {
     newest: 'CAST(p.post_id AS INTEGER) DESC',
     updated: 'COALESCE(p.crawled_at, p.discovered_at) DESC',
     title: "COALESCE(NULLIF(p.custom_name, ''), p.title)",
+    rating: `CASE WHEN ${SM('rating_count')} >= ${MIN_RATINGS} THEN 0 WHEN ${SM('rating')} IS NOT NULL THEN 1 ELSE 2 END ASC,
+      ${SM('rating')} DESC, ${SM('rating_count')} DESC, CAST(p.post_id AS INTEGER) DESC`,
+    release: `CASE WHEN COALESCE(${SM('release_date')}, '') = '' THEN 1 ELSE 0 END ASC, ${SM('release_date')} DESC, CAST(p.post_id AS INTEGER) DESC`,
     pan_first: `CASE
       WHEN ${IN_PAN_SQL} THEN 0
       WHEN EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status = 'pending') THEN 1

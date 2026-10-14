@@ -57,6 +57,18 @@ const FORMAT_LABELS: Record<string, { label: string; cls: string }> = {
 
 const PAGE_SIZE = 120;
 
+const LANG_NAMES: Record<string, string> = {
+  zh: '中文', ch: '中文', en: '英语', ja: '日语', ko: '韩语', fr: '法语', de: '德语', es: '西班牙语', it: '意大利语',
+  pt: '葡萄牙语', ru: '俄语', ar: '阿拉伯语', pl: '波兰语', nl: '荷兰语', th: '泰语', tr: '土耳其语', sv: '瑞典语',
+  da: '丹麦语', fi: '芬兰语', no: '挪威语', cs: '捷克语', hu: '匈牙利语', el: '希腊语', id: '印尼语', vi: '越南语', uk: '乌克兰语',
+};
+function langLabels(codes: string[]): string {
+  const names = codes.map(c => LANG_NAMES[c.toLowerCase().split('-')[0]] || c);
+  return [...new Set(names)].join('、');
+}
+const CLASS_NAMES: Record<string, string> = { GAME_BUNDLE: '捆绑包', PREMIUM_EDITION: '高级版', ADD_ON_PACK: '附加内容', DEMO: '试玩版' };
+const classLabel = (c: string) => CLASS_NAMES[c] || c;
+
 function hueFrom(str: string): number {
   let h = 2166136261 >>> 0;
   for (let i = 0; i < str.length; i++) {
@@ -94,6 +106,8 @@ export function Games() {
   const sort = sp.get('sort') || 'pan_first';
   const page = Math.max(1, Number(sp.get('page') || 1));
   const q = sp.get('q') || '';
+  const cnOnly = sp.get('cn') === '1';
+  const multiOnly = sp.get('multi') === '1';
 
   const [batchMode, setBatchMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -112,7 +126,7 @@ export function Games() {
 
   useEffect(() => {
     setSelected(new Set());
-  }, [view, sourceId, page, q]);
+  }, [view, sourceId, page, q, cnOnly, multiOnly]);
 
   const facets = useQuery({
     queryKey: ['facets', sourceId],
@@ -121,10 +135,11 @@ export function Games() {
   });
 
   const games = useQuery({
-    queryKey: ['games', sourceId, view, sort, q, page],
+    queryKey: ['games', sourceId, view, sort, q, page, cnOnly, multiOnly],
     queryFn: () =>
       api.get<{ total: number; rows: Game[] }>(
-        `/games?source_id=${sourceId}&view=${view}&sort=${sort}&page=${page}&size=${PAGE_SIZE}&q=${encodeURIComponent(q)}`
+        `/games?source_id=${sourceId}&view=${view}&sort=${sort}&page=${page}&size=${PAGE_SIZE}&q=${encodeURIComponent(q)}` +
+          `${cnOnly ? '&cn=1' : ''}${multiOnly ? '&multi=1' : ''}`
       ),
     enabled: !!sourceId,
     placeholderData: keepPreviousData,
@@ -278,7 +293,28 @@ export function Games() {
             <option value="newest">最新收录</option>
             <option value="updated">最近更新</option>
             <option value="title">按名称排序</option>
+            <option value="rating">评分最高</option>
+            <option value="release">发售日期（新→旧）</option>
           </select>
+
+          <button
+            type="button"
+            className={cx('btn btn-sm h-[34px]! px-3!', cnOnly && 'btn-primary')}
+            onClick={() => updateParams({ cn: cnOnly ? null : '1' })}
+            title="只看 PS Store 标注有中文字幕或中文语音的游戏"
+            aria-pressed={cnOnly}
+          >
+            有中文
+          </button>
+          <button
+            type="button"
+            className={cx('btn btn-sm h-[34px]! px-3!', multiOnly && 'btn-primary')}
+            onClick={() => updateParams({ multi: multiOnly ? null : '1' })}
+            title="只看支持 2 人及以上同屏游玩的游戏"
+            aria-pressed={multiOnly}
+          >
+            多人同屏
+          </button>
 
           <button
             type="button"
@@ -618,6 +654,14 @@ function GameTile({
       <div className="tile-sub">
         <span className="plat">{game.platform || 'PS5'}</span>
         <span className="num">{game.serial || `#${game.post_id}`}</span>
+        {(game.has_cn_sub || game.has_cn_voice) && (
+          <span className="tile-cn" title={game.has_cn_voice ? '有中文语音' : '有中文字幕'}>中</span>
+        )}
+        {game.rating != null && (
+          <span className="tile-rating" title={`PS Store 评分 ${game.rating}（${game.rating_count} 人评分）`}>
+            ★ {game.rating.toFixed(1)}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -900,7 +944,27 @@ function GameDrawer({
                 </p>
               )}
 
-              {(game.publisher || game.genres || game.release_date) && (
+              {game.rating != null && (
+                <div className="rating-box mb-3">
+                  <div className="rating-score">
+                    <strong>{game.rating.toFixed(2)}</strong>
+                    <span>{(game.rating_count || 0).toLocaleString()} 人评分</span>
+                  </div>
+                  {game.rating_dist && (
+                    <div className="rating-bars">
+                      {game.rating_dist.map((pct, i) => (
+                        <div key={i}>
+                          <span>{5 - i}★</span>
+                          <i><b style={{ width: `${pct}%` }} /></i>
+                          <span className="text-right">{pct}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {(game.publisher || game.genres || game.release_date || game.screen_langs?.length) && (
                 <dl className="specs">
                   {game.publisher && (
                     <div>
@@ -918,6 +982,48 @@ function GameDrawer({
                     <div>
                       <dt>发售日</dt>
                       <dd className="num">{game.release_date}</dd>
+                    </div>
+                  )}
+                  {!!game.store_platforms?.length && (
+                    <div>
+                      <dt>平台</dt>
+                      <dd>{game.store_platforms.join(' / ')}</dd>
+                    </div>
+                  )}
+                  {game.edition && (
+                    <div>
+                      <dt>版本</dt>
+                      <dd>{game.edition}{game.classification && game.classification !== 'FULL_GAME' ? `（${classLabel(game.classification)}）` : ''}</dd>
+                    </div>
+                  )}
+                  {!!game.screen_langs?.length && (
+                    <div>
+                      <dt>字幕语言</dt>
+                      <dd>{langLabels(game.screen_langs)}</dd>
+                    </div>
+                  )}
+                  {!!game.spoken_langs?.length && (
+                    <div>
+                      <dt>语音语言</dt>
+                      <dd>{langLabels(game.spoken_langs)}</dd>
+                    </div>
+                  )}
+                  {game.players != null && (
+                    <div>
+                      <dt>本地玩家</dt>
+                      <dd>{game.players > 1 ? `1–${game.players} 人` : '单人'}</dd>
+                    </div>
+                  )}
+                  {(game.online_play || game.ps_plus_required || game.in_game_purchases) && (
+                    <div>
+                      <dt>联机与付费</dt>
+                      <dd>
+                        {[
+                          game.online_play === 'REQUIRED' ? '需联网' : game.online_play === 'OPTIONAL' ? '可联机' : '',
+                          game.ps_plus_required ? '联机需 PS Plus' : '',
+                          game.in_game_purchases ? '含内购' : '',
+                        ].filter(Boolean).join(' · ') || '—'}
+                      </dd>
                     </div>
                   )}
                 </dl>

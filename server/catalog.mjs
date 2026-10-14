@@ -267,6 +267,7 @@ export function initCatalog() {
 
   // 4. Kick off background warm-up for transferred / pending_transfer games first
   setTimeout(() => warmUpPriorityCovers(), 1500);
+  setTimeout(() => backfillStoreMeta(), 30_000);
 }
 
 export function lookupCatalogBySerial(serial) {
@@ -371,6 +372,11 @@ function pickBestMediaImage(mediaList) {
   return '';
 }
 
+export const STORE_META_VER = 2;
+
+const isCnLang = (code) => /^(zh|ch)/i.test(String(code || ''));
+const noticeMap = (list) => Object.fromEntries((Array.isArray(list) ? list : []).map((n) => [n?.type, n?.value]));
+
 export function parseConceptPageHtml(html, conceptId) {
   const out = {
     concept_id: Number(conceptId),
@@ -382,55 +388,94 @@ export function parseConceptPageHtml(html, conceptId) {
     genres: '',
     release_date: '',
     description: '',
+    rating: null,
+    rating_count: null,
+    rating_dist: '',
+    screen_langs: '',
+    spoken_langs: '',
+    has_cn_sub: 0,
+    has_cn_voice: 0,
+    platforms: '',
+    players: null,
+    online_play: '',
+    ps_plus_required: 0,
+    in_game_purchases: 0,
+    classification: '',
+    edition: '',
   };
   if (!html) return out;
-  const conceptKey = `Concept:${conceptId}`;
+  // 同一个对象的字段分散在多段脚本里，先合并再解析
+  const cache = {};
   const scriptRe = /<script[^>]*id="env:[^"]*"[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/gi;
   let m;
   while ((m = scriptRe.exec(html)) !== null) {
-    const jsonText = m[1];
-    if (!jsonText.includes(conceptKey)) continue;
     try {
-      const root = JSON.parse(jsonText);
-      const cache = root?.cache;
-      const concept = cache?.[conceptKey];
-      if (!concept || typeof concept !== 'object') continue;
-      const prodRef = concept?.defaultProduct?.__ref;
-      const prod = prodRef && cache?.[prodRef] ? cache[prodRef] : null;
-
-      if (!out.name) out.name = cleanStoreName(prod?.name || concept?.name || '');
-      if (!out.publisher) out.publisher = prod?.publisherName || concept?.publisherName || '';
-      if (!out.cover_url) out.cover_url = pickBestMediaImage(prod?.media) || pickBestMediaImage(concept?.media) || '';
-
-      if (!out.genres) {
-        const genresArr = prod?.localizedGenres || concept?.localizedGenres;
-        if (Array.isArray(genresArr) && genresArr.length) {
-          out.genres = genresArr.map((g) => g?.value).filter(Boolean).join(' / ');
-        }
-      }
-
-      if (!out.release_date) {
-        const relObj = prod?.releaseDate || concept?.releaseDate;
-        const relVal = typeof relObj === 'string' ? relObj : (relObj?.value || '');
-        if (typeof relVal === 'string' && relVal.length >= 10) {
-          out.release_date = relVal.slice(0, 10);
-        }
-      }
-
-      if (!out.description) {
-        const descArr = concept?.descriptions || prod?.descriptions;
-        if (Array.isArray(descArr) && descArr.length) {
-          let shortDesc = '';
-          let longDesc = '';
-          for (const d of descArr) {
-            if (d?.type === 'SHORT' && d?.value) shortDesc = d.value;
-            else if (d?.type === 'LONG' && d?.value) longDesc = d.value;
-          }
-          out.description = stripHtmlDescription(longDesc || shortDesc);
-        }
-      }
+      const part = JSON.parse(m[1])?.cache;
+      if (!part || typeof part !== 'object') continue;
+      for (const [k, v] of Object.entries(part)) cache[k] = Object.assign(cache[k] || {}, v);
     } catch {}
   }
+  const concept = cache[`Concept:${conceptId}`];
+  if (!concept) return out;
+  const prodRef = concept?.defaultProduct?.__ref;
+  const prod = (prodRef && cache[prodRef]) || {};
+
+  out.name = cleanStoreName(prod.name || concept.name || '');
+  out.publisher = prod.publisherName || concept.publisherName || '';
+  out.cover_url = pickBestMediaImage(prod.media) || pickBestMediaImage(concept.media) || '';
+
+  const genresArr = prod.localizedGenres || concept.localizedGenres;
+  if (Array.isArray(genresArr) && genresArr.length) out.genres = genresArr.map((g) => g?.value).filter(Boolean).join(' / ');
+
+  const relObj = prod.releaseDate || concept.releaseDate;
+  const relVal = typeof relObj === 'string' ? relObj : (relObj?.value || '');
+  if (typeof relVal === 'string' && relVal.length >= 10) out.release_date = relVal.slice(0, 10);
+
+  const descArr = concept.descriptions || prod.descriptions;
+  if (Array.isArray(descArr) && descArr.length) {
+    let shortDesc = '';
+    let longDesc = '';
+    for (const d of descArr) {
+      if (d?.type === 'SHORT' && d?.value) shortDesc = d.value;
+      else if (d?.type === 'LONG' && d?.value) longDesc = d.value;
+    }
+    out.description = stripHtmlDescription(longDesc || shortDesc);
+  }
+
+  const star = prod.starRating;
+  if (star && Number(star.totalRatingsCount) > 0) {
+    out.rating = Number(star.averageRating) || null;
+    out.rating_count = Number(star.totalRatingsCount) || 0;
+    if (Array.isArray(star.ratingsDistribution)) {
+      const dist = {};
+      for (const d of star.ratingsDistribution) dist[d?.rating] = Number(d?.percentageRaw) || 0;
+      out.rating_dist = JSON.stringify([5, 4, 3, 2, 1].map((r) => dist[r] || 0));
+    }
+  }
+
+  const screen = Array.isArray(prod.screenLanguages) ? prod.screenLanguages : [];
+  const spoken = Array.isArray(prod.spokenLanguages) ? prod.spokenLanguages : [];
+  out.screen_langs = screen.join(',');
+  out.spoken_langs = spoken.join(',');
+  out.has_cn_sub = screen.some(isCnLang) ? 1 : 0;
+  out.has_cn_voice = spoken.some(isCnLang) ? 1 : 0;
+
+  const platforms = (Array.isArray(prod.platforms) && prod.platforms.length) ? prod.platforms : concept.platforms;
+  out.platforms = Array.isArray(platforms) ? platforms.join(',') : '';
+
+  const notices = {
+    ...noticeMap(concept.compatibilityNoticesByPlatform?.Common),
+    ...noticeMap(prod.compatibilityNoticesByPlatform?.Common),
+  };
+  const players = Number(notices.NO_OF_PLAYERS);
+  out.players = Number.isFinite(players) && players > 0 ? players : null;
+  out.online_play = notices.ONLINE_PLAY_MODE || '';
+  out.ps_plus_required = String(notices.PS_PLUS_REQUIRED) === 'true' ? 1 : 0;
+  out.in_game_purchases = notices.IN_GAME_PURCHASES && notices.IN_GAME_PURCHASES !== 'NONE' ? 1 : 0;
+
+  out.classification = prod.storeDisplayClassification || '';
+  out.edition = prod.edition?.name || '';
+
   out.found = Boolean(out.name || out.cover_url || out.description);
   return out;
 }
@@ -507,7 +552,7 @@ function pumpQueue() {
   while (activeWorkers < MAX_CONCURRENT && waitQueue.length > 0) {
     const task = waitQueue.shift();
     activeWorkers++;
-    runFetchTask(task.conceptId, task.force)
+    runFetchTask(task.conceptId, task.force, task.metaOnly)
       .then(task.resolve, task.reject)
       .finally(() => {
         activeWorkers--;
@@ -517,7 +562,15 @@ function pumpQueue() {
   }
 }
 
-async function runFetchTask(conceptId, force = false) {
+const STORE_COLS = [
+  'concept_id', 'found', 'has_cover', 'locale', 'name', 'cover_url', 'publisher', 'genres', 'release_date', 'description', 'fetched_at',
+  'rating', 'rating_count', 'rating_dist', 'screen_langs', 'spoken_langs', 'has_cn_sub', 'has_cn_voice', 'platforms', 'players',
+  'online_play', 'ps_plus_required', 'in_game_purchases', 'classification', 'edition', 'meta_ver',
+];
+const STORE_UPSERT = `INSERT OR REPLACE INTO store_meta (${STORE_COLS.join(', ')}) VALUES (${STORE_COLS.map(() => '?').join(', ')})`;
+
+// metaOnly：只刷新商店信息（用于补全新字段），已有封面保留不重下
+async function runFetchTask(conceptId, force = false, metaOnly = false) {
   const cid = Number(conceptId);
   let row = one('SELECT * FROM store_meta WHERE concept_id = ?', cid);
   if (!force && row) {
@@ -540,30 +593,30 @@ async function runFetchTask(conceptId, force = false) {
   }
 
   const meta = await fetchStoreMetaRemote(cid);
+  // 本次没抓到但以前抓到过：保留旧数据，只记录版本，避免网络抖动把信息清空
+  if (metaOnly && !meta.found && row?.found) {
+    exec('UPDATE store_meta SET meta_ver = ? WHERE concept_id = ?', STORE_META_VER, cid);
+    return getCoverFile(cid);
+  }
   let coverFile = null;
   if (meta.cover_url) {
-    if (force) {
+    if (force && !metaOnly) {
       try { fs.unlinkSync(path.join(COVERS_DIR, `${cid}.img`)); } catch {}
     }
     coverFile = await downloadCoverToDisk(cid, meta.cover_url);
   }
+  if (!coverFile && metaOnly) coverFile = getCoverFile(cid);
 
-  exec(
-    `INSERT OR REPLACE INTO store_meta
-     (concept_id, found, has_cover, locale, name, cover_url, publisher, genres, release_date, description, fetched_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    cid,
-    meta.found ? 1 : 0,
-    coverFile ? 1 : 0,
-    meta.locale || '',
-    meta.name || '',
-    meta.cover_url || '',
-    meta.publisher || '',
-    meta.genres || '',
-    meta.release_date || '',
-    meta.description || '',
-    nowSec
-  );
+  const rec = {
+    ...parseConceptPageHtml('', cid),
+    ...meta,
+    concept_id: cid,
+    found: meta.found ? 1 : 0,
+    has_cover: coverFile ? 1 : 0,
+    fetched_at: nowSec,
+    meta_ver: STORE_META_VER,
+  };
+  exec(STORE_UPSERT, ...STORE_COLS.map((c) => rec[c] ?? null));
 
   if (meta.found) {
     bus.emit('meta', { concept_id: cid, has_cover: Boolean(coverFile) });
@@ -571,7 +624,7 @@ async function runFetchTask(conceptId, force = false) {
   return coverFile;
 }
 
-export function ensureCoverFile(conceptId, { priority = false, force = false } = {}) {
+export function ensureCoverFile(conceptId, { priority = false, force = false, metaOnly = false } = {}) {
   const cid = Number(conceptId);
   if (!cid || cid <= 0) return Promise.resolve(null);
 
@@ -593,7 +646,7 @@ export function ensureCoverFile(conceptId, { priority = false, force = false } =
   }
 
   const p = new Promise((resolve, reject) => {
-    const item = { conceptId: cid, force, resolve, reject };
+    const item = { conceptId: cid, force, metaOnly, resolve, reject };
     if (priority) waitQueue.unshift(item);
     else waitQueue.push(item);
   });
@@ -609,9 +662,26 @@ export async function refreshStoreMeta(conceptId) {
   return one('SELECT * FROM store_meta WHERE concept_id = ?', cid);
 }
 
+// 旧版本抓取的商店信息缺少评分、语言等字段：后台逐个重抓补全（串行、间隔 1.5 秒，不重下封面）
+let backfilling = false;
+async function backfillStoreMeta() {
+  if (backfilling) return;
+  backfilling = true;
+  try {
+    const rows = all('SELECT concept_id FROM store_meta WHERE found = 1 AND meta_ver < ? ORDER BY concept_id', STORE_META_VER);
+    if (rows.length) console.log(`[catalog] 补全商店信息：${rows.length} 个游戏`);
+    for (const r of rows) {
+      await ensureCoverFile(r.concept_id, { force: true, metaOnly: true }).catch(() => {});
+      await new Promise((ok) => setTimeout(ok, 1500));
+    }
+  } finally {
+    backfilling = false;
+  }
+}
+
 function warmUpPriorityCovers() {
   try {
-    // Prioritize games that are already in Netdisk (links or du_results) or pending transfer, plus top 40 newest games
+    // Prioritize games that are already in Netdisk (links or pan_items) or pending transfer, plus top 40 newest games
     const priorityRows = all(`
       SELECT DISTINCT p.concept_id
       FROM posts p
@@ -620,8 +690,7 @@ function warmUpPriorityCovers() {
       ORDER BY
         CASE
           WHEN l.status IN ('saved', 'exists', 'pending')
-            OR EXISTS (SELECT 1 FROM du_results d WHERE UPPER(d.name) = UPPER(p.serial))
-            OR (p.share_serials IS NOT NULL AND EXISTS (SELECT 1 FROM du_results d WHERE ',' || UPPER(p.share_serials) || ',' LIKE '%,' || UPPER(d.name) || ',%'))
+            OR EXISTS (SELECT 1 FROM pan_items i WHERE i.source_id = p.source_id AND (i.serial = UPPER(p.serial) OR i.concept_id = p.concept_id))
           THEN 0
           ELSE 1
         END,
@@ -634,6 +703,11 @@ function warmUpPriorityCovers() {
       }
     }
   } catch {}
+}
+
+const splitList = (s) => (s ? String(s).split(',').filter(Boolean) : []);
+function parseJsonArray(s) {
+  try { const v = JSON.parse(s || 'null'); return Array.isArray(v) ? v : null; } catch { return null; }
 }
 
 export function enrichGameRow(row, storeMetaMap = null) {
@@ -683,6 +757,20 @@ export function enrichGameRow(row, storeMetaMap = null) {
     genres: sm?.genres || '',
     release_date: sm?.release_date || '',
     description: sm?.description || '',
+    rating: sm?.rating ?? null,
+    rating_count: sm?.rating_count ?? null,
+    rating_dist: parseJsonArray(sm?.rating_dist),
+    screen_langs: splitList(sm?.screen_langs),
+    spoken_langs: splitList(sm?.spoken_langs),
+    has_cn_sub: Boolean(sm?.has_cn_sub),
+    has_cn_voice: Boolean(sm?.has_cn_voice),
+    store_platforms: splitList(sm?.platforms),
+    players: sm?.players ?? null,
+    online_play: sm?.online_play || '',
+    ps_plus_required: Boolean(sm?.ps_plus_required),
+    in_game_purchases: Boolean(sm?.in_game_purchases),
+    classification: sm?.classification || '',
+    edition: sm?.edition || '',
     meta_state: sm ? (sm.found ? 'ready' : 'missing') : (conceptId > 0 ? 'pending' : 'missing'),
   };
 }

@@ -146,6 +146,15 @@ export const one = (sql, ...args) => db.prepare(sql).get(...args);
 export const all = (sql, ...args) => db.prepare(sql).all(...args);
 export const exec = (sql, ...args) => db.prepare(sql).run(...args);
 
+// 商店信息扩展字段（评分、语言、人数、联机等）；meta_ver 低于当前版本的行会在后台重抓补全
+const storeCols = new Set(all('PRAGMA table_info(store_meta)').map(c => c.name));
+for (const [col, type] of [
+  ['rating', 'REAL'], ['rating_count', 'INTEGER'], ['rating_dist', 'TEXT'],
+  ['screen_langs', 'TEXT'], ['spoken_langs', 'TEXT'], ['has_cn_sub', 'INTEGER'], ['has_cn_voice', 'INTEGER'],
+  ['platforms', 'TEXT'], ['players', 'INTEGER'], ['online_play', 'TEXT'], ['ps_plus_required', 'INTEGER'],
+  ['in_game_purchases', 'INTEGER'], ['classification', 'TEXT'], ['edition', 'TEXT'], ['meta_ver', 'INTEGER NOT NULL DEFAULT 0'],
+]) if (!storeCols.has(col)) db.exec(`ALTER TABLE store_meta ADD COLUMN ${col} ${type}`);
+
 const linkCols = new Set(all('PRAGMA table_info(links)').map(c => c.name));
 if (!linkCols.has('remark')) db.exec('ALTER TABLE links ADD COLUMN remark TEXT');
 if (!linkCols.has('format')) db.exec('ALTER TABLE links ADD COLUMN format TEXT');

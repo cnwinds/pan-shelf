@@ -116,6 +116,21 @@ export interface Game {
   genres?: string;
   release_date?: string;
   description?: string;
+  rating?: number | null;
+  rating_count?: number | null;
+  /** 5 星到 1 星各自的百分比 */
+  rating_dist?: number[] | null;
+  screen_langs?: string[];
+  spoken_langs?: string[];
+  has_cn_sub?: boolean;
+  has_cn_voice?: boolean;
+  store_platforms?: string[];
+  players?: number | null;
+  online_play?: string;
+  ps_plus_required?: boolean;
+  in_game_purchases?: boolean;
+  classification?: string;
+  edition?: string;
   meta_state?: 'ready' | 'pending' | 'missing';
   pan_state?: PanState;
   pan_size?: number | null;

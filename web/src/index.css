@@ -867,6 +867,73 @@
   letter-spacing: 0.04em;
   color: var(--muted);
 }
+.tile-rating {
+  margin-left: auto;
+  color: #f5c451;
+  font-family: var(--num);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.tile-cn {
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid rgba(95, 211, 160, 0.45);
+  color: #5fd3a0;
+  font-size: 0.66rem;
+  line-height: 1.35;
+}
+
+/* 详情页评分分布 */
+.rating-box {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--raise);
+}
+.rating-score {
+  text-align: center;
+  min-width: 4.5rem;
+}
+.rating-score strong {
+  display: block;
+  font-family: var(--num);
+  font-size: 1.6rem;
+  color: #f5c451;
+  line-height: 1.1;
+}
+.rating-score span {
+  font-size: 0.7rem;
+  color: var(--faint);
+}
+.rating-bars {
+  flex: 1;
+  display: grid;
+  gap: 3px;
+}
+.rating-bars div {
+  display: grid;
+  grid-template-columns: 1.6rem 1fr 2.4rem;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-family: var(--num);
+}
+.rating-bars i {
+  display: block;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+.rating-bars i b {
+  display: block;
+  height: 100%;
+  background: #f5c451;
+}
 
 /* =========================================================
    右侧游戏详情抽屉 (.drawer)
