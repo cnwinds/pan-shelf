@@ -61,6 +61,8 @@ docker compose up -d --build   # → http://127.0.0.1:5175
   （规则在「设置 → 转存策略」修改，存量可在任务页新建「清理排除项」）。
 - **规整先预览**：转存完成后自动生成规整预览（只读），确认勾选后才执行；删除源目录前仍会验证已清空。
 - **任务可中断续跑**：所有进度落在 SQLite（`state/ps5watch.db`），服务重启后未完成的任务标记为「已中断」，重新运行即从断点继续。
+- **游戏封面**：按游戏编号匹配 PS Store 取封面，编号目录 `state/panplay-catalog.json` 首次启动自动下载、每 7 天更新
+  （数据来自 [PlayStation-Titles](https://github.com/andshrew/PlayStation-Titles)，默认走 jsDelivr 镜像，可用 `PS5WATCH_CATALOG_URL` 指定下载地址）。
 - **多来源**：在「设置 → 采集来源」添加其他分类或站点，每个来源有独立的游戏库和转存目录。
 
 ## 命令行
