@@ -6,6 +6,7 @@ import { getSettings } from './settings.mjs';
 import { recoverOnBoot } from './jobs.mjs';
 import { startScheduler } from './scheduler.mjs';
 import { WEB_DIST, SERVER_INFO } from './paths.mjs';
+import { initCatalog } from './catalog.mjs';
 import routes from './api.mjs';
 import './tasks/crawl.mjs';
 import './tasks/transfer.mjs';
@@ -17,6 +18,7 @@ import './tasks/remove.mjs';
 
 const migrated = migrateLegacy();
 if (migrated) console.log(`已导入旧版数据：帖子 ${migrated.posts}，链接 ${migrated.links}，用量记录 ${migrated.du}`);
+initCatalog();
 const interrupted = recoverOnBoot();
 if (interrupted) console.log(`上次有 ${interrupted} 个任务未完成，已标记为「已中断」，可在任务页重新运行`);
 

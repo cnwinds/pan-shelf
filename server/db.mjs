@@ -113,6 +113,20 @@ CREATE TABLE IF NOT EXISTS du_results (
   scanned_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_du_parent ON du_results(parent);
+
+CREATE TABLE IF NOT EXISTS store_meta (
+  concept_id   INTEGER PRIMARY KEY,
+  found        INTEGER NOT NULL DEFAULT 0,
+  has_cover    INTEGER NOT NULL DEFAULT 0,
+  locale       TEXT,
+  name         TEXT,
+  cover_url    TEXT,
+  publisher    TEXT,
+  genres       TEXT,
+  release_date TEXT,
+  description  TEXT,
+  fetched_at   INTEGER NOT NULL DEFAULT 0
+);
 `);
 
 export const one = (sql, ...args) => db.prepare(sql).get(...args);
@@ -126,6 +140,8 @@ const postCols = new Set(all('PRAGMA table_info(posts)').map(c => c.name));
 if (!postCols.has('serial')) db.exec('ALTER TABLE posts ADD COLUMN serial TEXT');
 // 分享里文件名上的编号（站点写的编号有时和实际内容不同），逗号分隔，删除游戏时按需查询并缓存
 if (!postCols.has('share_serials')) db.exec('ALTER TABLE posts ADD COLUMN share_serials TEXT');
+if (!postCols.has('custom_name')) db.exec('ALTER TABLE posts ADD COLUMN custom_name TEXT');
+if (!postCols.has('concept_id')) db.exec('ALTER TABLE posts ADD COLUMN concept_id INTEGER');
 
 export function tx(fn) {
   db.exec('BEGIN');

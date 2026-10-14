@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { all, one, exec, tx } from './db.mjs';
 import { getSettings, updateSettings, DEFAULTS } from './settings.mjs';
 import { listSources, getSource, saveSource, deleteSource, ADAPTERS } from './sources.mjs';
@@ -8,7 +9,10 @@ import { startLogin, cancelLogin, loginState } from './login.mjs';
 import * as bd from './baidu.mjs';
 import { toast, webhook } from './notify.mjs';
 import { duChildren } from './tasks/du.mjs';
-import { resolveRemoval } from './tasks/remove.mjs';
+import { resolveRemoval, resetLinks } from './tasks/remove.mjs';
+import { serialsFromName } from './tasks/normalize.mjs';
+import { pickLinks } from './linkpick.mjs';
+import { enrichGameRow, ensureCoverFile, getCoverFile, detectImageMime, refreshStoreMeta, lookupCatalogBySerial } from './catalog.mjs';
 import { bus } from './bus.mjs';
 
 const bad = (code, msg) => Object.assign(new Error(msg), { statusCode: code });
@@ -28,15 +32,22 @@ function sourceStats(sid) {
 }
 
 // ---------- 游戏库视图 ----------
+const IN_PAN_SQL = `(
+  EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status IN ('saved','exists'))
+  OR (p.serial IS NOT NULL AND EXISTS (SELECT 1 FROM du_results d JOIN sources s ON s.id = p.source_id WHERE d.parent = s.dest_dir AND UPPER(d.name) = UPPER(p.serial)))
+  OR (p.share_serials IS NOT NULL AND EXISTS (SELECT 1 FROM du_results d JOIN sources s ON s.id = p.source_id WHERE d.parent = s.dest_dir AND ',' || UPPER(p.share_serials) || ',' LIKE '%,' || UPPER(d.name) || ',%'))
+)`;
+
 const VIEWS = {
   all: '1 = 1',
   pending_detail: `p.status = 'pending_detail'`,
   detail_failed: `p.status = 'failed'`,
   no_link: `p.status = 'no_link'`,
   pending_transfer: `EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status = 'pending')`,
-  transferred: `EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status IN ('saved','exists'))`,
+  transferred: IN_PAN_SQL,
   available: `EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status = 'available')
-              AND NOT EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status IN ('saved','exists','pending'))`,
+              AND NOT ${IN_PAN_SQL}
+              AND NOT EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status = 'pending')`,
   transfer_failed: `EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND (l.status LIKE 'err\\_%' ESCAPE '\\' OR l.status = 'exc'))`,
   invalid: `EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status = 'invalid')`,
   skipped: `EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status = 'skipped')`,
@@ -48,22 +59,105 @@ function gamesQuery(q) {
   if (q.q) {
     // 空格分隔的多个关键词都要命中（「霍格沃茨 遗」「hogwarts」「PPSA01593」都能找到）
     for (const kw of String(q.q).trim().split(/\s+/).slice(0, 5)) {
-      where.push(`(p.title LIKE ? OR p.post_id = ? OR p.serial LIKE ? OR EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.surl LIKE ?))`);
-      args.push(`%${kw}%`, kw, `%${kw.replace(/[-_\s]/g, '')}%`, `%${kw}%`);
+      where.push(`(p.title LIKE ? OR p.custom_name LIKE ? OR p.post_id = ? OR p.serial LIKE ? OR EXISTS (SELECT 1 FROM store_meta sm WHERE sm.concept_id = p.concept_id AND sm.name LIKE ?) OR EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.surl LIKE ?))`);
+      args.push(`%${kw}%`, `%${kw}%`, kw, `%${kw.replace(/[-_\s]/g, '')}%`, `%${kw}%`, `%${kw}%`);
     }
   }
   return { w: where.join(' AND '), args };
 }
 
+function buildPanInventory(source_id) {
+  const bySerial = new Map();
+  const byConcept = new Map();
+  try {
+    const src = source_id ? getSource(source_id) : listSources()[0];
+    if (!src?.dest_dir) return { bySerial, byConcept };
+    const rows = all('SELECT name, size FROM du_results WHERE parent = ?', src.dest_dir);
+    for (const r of rows) {
+      const serials = serialsFromName(r.name);
+      if (serials.size === 1) {
+        const s = [...serials][0].toUpperCase();
+        const sz = Number(r.size) || 0;
+        bySerial.set(s, (bySerial.get(s) || 0) + sz);
+        const cat = lookupCatalogBySerial(s);
+        if (cat?.conceptId) {
+          byConcept.set(Number(cat.conceptId), {
+            serial: s,
+            size: (byConcept.get(Number(cat.conceptId))?.size || 0) + sz,
+          });
+        }
+      }
+    }
+  } catch {}
+  return { bySerial, byConcept };
+}
+
+function matchPanSize(post, enrichedSerial, inv) {
+  if (!inv) return null;
+  const s = (enrichedSerial || post?.serial || '').toUpperCase();
+  if (s && inv.bySerial.has(s)) return inv.bySerial.get(s);
+  if (post?.share_serials) {
+    for (const ss of String(post.share_serials).split(',')) {
+      const clean = ss.trim().toUpperCase();
+      if (clean && inv.bySerial.has(clean)) return inv.bySerial.get(clean);
+    }
+  }
+  const cid = Number(post?.concept_id || 0);
+  if (cid > 0 && inv.byConcept.has(cid)) {
+    return inv.byConcept.get(cid).size;
+  }
+  return null;
+}
+
+function computePanState(post, links, hasPanDir = false) {
+  if (hasPanDir || links.some(l => l.status === 'saved' || l.status === 'exists')) return 'in_pan';
+  if (links.some(l => l.status === 'pending')) return 'queued';
+  if (links.some(l => l.status === 'available')) return 'available';
+  if (post.status === 'pending_detail') return 'pending_detail';
+  if (post.status === 'failed' || links.some(l => l.status.startsWith('err_') || l.status === 'exc')) return 'failed';
+  return 'no_link';
+}
+
 function listGames(q) {
-  const size = Math.min(Number(q.size) || 50, 500);
+  const size = Math.min(Number(q.size) || 120, 2000);
   const page = Math.max(Number(q.page) || 1, 1);
   const { w, args } = gamesQuery(q);
-  const order = { newest: 'CAST(p.post_id AS INTEGER) DESC', updated: 'COALESCE(p.crawled_at, p.discovered_at) DESC', title: 'p.title' }[q.sort] || 'CAST(p.post_id AS INTEGER) DESC';
+  const order = {
+    newest: 'CAST(p.post_id AS INTEGER) DESC',
+    updated: 'COALESCE(p.crawled_at, p.discovered_at) DESC',
+    title: "COALESCE(NULLIF(p.custom_name, ''), p.title)",
+    pan_first: `CASE
+      WHEN ${IN_PAN_SQL} THEN 0
+      WHEN EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status = 'pending') THEN 1
+      ELSE 2
+    END ASC, CAST(p.post_id AS INTEGER) DESC`,
+  }[q.sort] || 'CAST(p.post_id AS INTEGER) DESC';
   const rows = all(`SELECT p.* FROM posts p WHERE ${w} ORDER BY ${order} LIMIT ? OFFSET ?`, ...args, size, (page - 1) * size);
   const total = one(`SELECT COUNT(*) n FROM posts p WHERE ${w}`, ...args).n;
   const linkStmt = 'SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid';
-  return { total, page, size, rows: rows.map(r => ({ ...r, links: all(linkStmt, r.source_id, r.post_id) })) };
+
+  const conceptIds = [...new Set(rows.map(r => Number(r.concept_id || 0)).filter(c => c > 0))];
+  const storeMetaMap = new Map();
+  if (conceptIds.length) {
+    const ph = conceptIds.map(() => '?').join(',');
+    for (const sm of all(`SELECT * FROM store_meta WHERE concept_id IN (${ph})`, ...conceptIds)) {
+      storeMetaMap.set(Number(sm.concept_id), sm);
+    }
+  }
+  const inv = buildPanInventory(q.source_id);
+
+  return {
+    total,
+    page,
+    size,
+    rows: rows.map(r => {
+      const links = all(linkStmt, r.source_id, r.post_id);
+      const enriched = enrichGameRow(r, storeMetaMap);
+      const pan_size = matchPanSize(r, enriched.serial, inv);
+      const pan_state = computePanState(r, links, pan_size !== null);
+      return { ...enriched, pan_state, pan_size, links };
+    }),
+  };
 }
 
 function facets(source_id) {
@@ -106,11 +200,39 @@ function gameAction(body) {
       if (!ids.length) throw bad(400, '请选择要加入网盘的游戏');
       let n = 0, games = 0;
       tx(() => ids.forEach(id => {
-        const c = exec(`UPDATE links SET status = 'pending', last_error = NULL WHERE source_id = ? AND post_id = ? AND status = 'available'`, source_id, id).changes;
-        n += c; if (c) games++;
+        let c = exec(`UPDATE links SET status = 'pending', last_error = NULL WHERE source_id = ? AND post_id = ? AND status = 'available'`, source_id, id).changes;
+        if (!c) {
+          // 如果没有 available 链接，且尚未入盘，则从非失效链接中按优选规则挑出并加入队列
+          const existing = all(`SELECT surl, pwd, remark, status FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid`, source_id, id);
+          const alreadyIn = existing.some(l => ['saved', 'exists', 'pending'].includes(l.status));
+          if (!alreadyIn && existing.length) {
+            const candidates = existing.filter(l => l.status !== 'invalid');
+            if (candidates.length) {
+              const picked = candidates.some(l => l.remark === null)
+                ? candidates.map(l => ({ ...l, chosen: true }))
+                : pickLinks(candidates);
+              for (const l of picked) {
+                if (l.chosen) {
+                  c += exec(`UPDATE links SET status = 'pending', last_error = NULL WHERE source_id = ? AND post_id = ? AND surl = ?`, source_id, id, l.surl).changes;
+                }
+              }
+            }
+          }
+        }
+        n += c;
+        if (c) games++;
       }));
-      if (!n) throw bad(400, '所选游戏没有可加入的链接（可能已在网盘里、还没采集到链接，或链接都被跳过了）');
+      if (!n) throw bad(400, '所选游戏没有可加入的链接（可能已在网盘里、还没采集到链接，或链接已失效）');
       return { queued: n, games, job: jobs.enqueue('transfer', { source_id, trigger: 'manual' }) };
+    }
+    case 'cancel_transfer': {
+      const ids = (body.post_ids || []).map(String);
+      if (!ids.length) throw bad(400, '请选择要取消排队的游戏');
+      let n = 0;
+      tx(() => ids.forEach(id => {
+        n += exec(`UPDATE links SET status = 'available', last_error = NULL WHERE source_id = ? AND post_id = ? AND status = 'pending'`, source_id, id).changes;
+      }));
+      return { cancelled: n };
     }
     case 'retry_failed': {
       const n = exec(`UPDATE links SET status = 'pending' WHERE source_id = ? AND (status LIKE 'err\\_%' ESCAPE '\\' OR status = 'exc')`, source_id).changes;
@@ -139,7 +261,7 @@ export default async function routes(app) {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     res.write('retry: 3000\n\n');
     const send = (type) => (data) => res.write(`event: ${type}\ndata: ${JSON.stringify(data ?? {})}\n\n`);
-    const types = ['job', 'progress', 'log', 'event', 'site', 'login', 'settings', 'account-changed', 'schedule'];
+    const types = ['job', 'progress', 'log', 'event', 'site', 'login', 'settings', 'account-changed', 'schedule', 'meta'];
     const handlers = types.map(t => [t, send(t)]);
     handlers.forEach(([t, h]) => bus.on(t, h));
     const ping = setInterval(() => res.write(': ping\n\n'), 20000);
@@ -181,8 +303,73 @@ export default async function routes(app) {
 
   // ---------- 游戏库 ----------
   app.get('/api/games', async (req) => listGames(req.query));
+  app.get('/api/games/detail', async (req) => {
+    const { source_id, post_id } = req.query || {};
+    if (!source_id || !post_id) throw bad(400, '缺少参数');
+    const row = one('SELECT * FROM posts WHERE source_id = ? AND post_id = ?', source_id, String(post_id));
+    if (!row) throw bad(404, '游戏不存在');
+    let enriched = enrichGameRow(row);
+    if (enriched.concept_id > 0 && enriched.meta_state === 'pending') {
+      await ensureCoverFile(enriched.concept_id, { priority: true });
+      enriched = enrichGameRow(row);
+    }
+    const links = all('SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid', source_id, String(post_id));
+    const inv = buildPanInventory(source_id);
+    const pan_size = matchPanSize(row, enriched.serial, inv);
+    return { game: { ...enriched, pan_state: computePanState(row, links, pan_size !== null), pan_size, links } };
+  });
   app.get('/api/games/facets', async (req) => facets(req.query.source_id));
   app.post('/api/games/actions', async (req) => gameAction(req.body));
+  app.post('/api/games/rename', async (req) => {
+    const { source_id, post_id, name = '' } = req.body || {};
+    if (!getSource(source_id)) throw bad(400, '需要指定来源');
+    if (!post_id) throw bad(400, '需要指定游戏');
+    const clean = String(name || '').trim();
+    exec('UPDATE posts SET custom_name = ? WHERE source_id = ? AND post_id = ?', clean || null, source_id, String(post_id));
+    const row = one('SELECT * FROM posts WHERE source_id = ? AND post_id = ?', source_id, String(post_id));
+    if (!row) throw bad(404, '游戏不存在');
+    const enriched = enrichGameRow(row);
+    const links = all('SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid', source_id, String(post_id));
+    const inv = buildPanInventory(source_id);
+    const pan_size = matchPanSize(row, enriched.serial, inv);
+    return { ok: true, game: { ...enriched, pan_state: computePanState(row, links, pan_size !== null), pan_size, links } };
+  });
+  app.post('/api/games/meta-refresh', async (req) => {
+    const { source_id, post_id, concept_id } = req.body || {};
+    let cid = Number(concept_id || 0);
+    let row = null;
+    if (source_id && post_id) {
+      row = one('SELECT * FROM posts WHERE source_id = ? AND post_id = ?', source_id, String(post_id));
+      if (row && !cid) cid = Number(row.concept_id || 0);
+    }
+    if (!cid || cid <= 0) throw bad(400, '该游戏没有关联 PlayStation Store Concept ID');
+    await refreshStoreMeta(cid);
+    if (row) {
+      const enriched = enrichGameRow(row);
+      const links = all('SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid', source_id, String(post_id));
+      const inv = buildPanInventory(source_id);
+      const pan_size = matchPanSize(row, enriched.serial, inv);
+      return { ok: true, game: { ...enriched, pan_state: computePanState(row, links, pan_size !== null), pan_size, links } };
+    }
+    return { ok: true, concept_id: cid };
+  });
+  app.get('/api/cover/:conceptId', async (req, reply) => {
+    const cid = Number(req.params.conceptId || 0);
+    if (!cid || cid <= 0) return reply.code(404).send({ error: 'invalid concept id' });
+    let file = getCoverFile(cid);
+    if (!file) {
+      file = await ensureCoverFile(cid, { priority: true });
+    }
+    if (!file || !fs.existsSync(file)) {
+      return reply.code(404).send({ error: 'cover not found' });
+    }
+    const buf = fs.readFileSync(file);
+    const mime = detectImageMime(buf);
+    reply
+      .header('Content-Type', mime)
+      .header('Cache-Control', 'public, max-age=604800')
+      .send(buf);
+  });
   app.post('/api/games/remove-preview', async (req) => {
     const { source_id, post_ids = [] } = req.body || {};
     if (!getSource(source_id)) throw bad(400, '需要指定来源');
@@ -191,9 +378,13 @@ export default async function routes(app) {
     return { games: await resolveRemoval(source_id, post_ids) };
   });
   app.post('/api/games/remove', async (req) => {
-    const { source_id, post_ids = [] } = req.body || {};
+    const { source_id, post_ids = [], reset_only = false } = req.body || {};
     if (!getSource(source_id)) throw bad(400, '需要指定来源');
     if (!post_ids.length) throw bad(400, '请选择要删除的游戏');
+    if (reset_only) {
+      post_ids.forEach(pid => resetLinks(source_id, String(pid)));
+      return { ok: true, reset: post_ids.length };
+    }
     return { job: jobs.enqueue('remove', { source_id, params: { post_ids: post_ids.map(String) }, dedupe: false }) };
   });
 

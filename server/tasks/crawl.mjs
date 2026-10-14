@@ -7,6 +7,7 @@ import { notify } from '../notify.mjs';
 import { nowIso } from '../util.mjs';
 
 import { pickLinks, pickSummary } from '../linkpick.mjs';
+import { matchCatalogForPost } from '../catalog.mjs';
 
 class SiteBlocked extends Error {}
 const AUTO_SKIP = '自动跳过：';
@@ -91,8 +92,11 @@ defineJob('crawl', {
         continue;
       }
       const { title, links, serial } = adapter.extractDetail(html, src);
-      exec(`UPDATE posts SET title = ?, serial = COALESCE(?, serial), status = ?, crawled_at = ?, fail_count = 0, last_error = NULL WHERE source_id = ? AND post_id = ?`,
-        title || post.title, serial || null, links.length ? 'links_done' : 'no_link', nowIso(), src.id, post.post_id);
+      const catMatch = matchCatalogForPost(serial, title || post.title);
+      const finalSerial = serial || catMatch?.titleId || null;
+      const finalConceptId = catMatch?.conceptId || null;
+      exec(`UPDATE posts SET title = ?, serial = COALESCE(?, serial), concept_id = COALESCE(?, concept_id), status = ?, crawled_at = ?, fail_count = 0, last_error = NULL WHERE source_id = ? AND post_id = ?`,
+        title || post.title, finalSerial, finalConceptId, links.length ? 'links_done' : 'no_link', nowIso(), src.id, post.post_id);
       counters.crawled++;
       if (!links.length) counters.no_link++;
       let added = 0;

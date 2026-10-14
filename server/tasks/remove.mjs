@@ -17,6 +17,11 @@ export async function resolveRemoval(sourceId, postIds, { sizes = true } = {}) {
   const src = getSource(sourceId);
   if (!src) throw new Error('来源不存在');
   const top = await bd.listDir(src.dest_dir) || [];
+  // 用实时目录清掉用量缓存里已不存在的条目，否则游戏库会按缓存继续显示为已入盘
+  const liveNames = new Set(top.map(e => e.name));
+  for (const old of all('SELECT path, name FROM du_results WHERE parent = ?', src.dest_dir)) {
+    if (!liveNames.has(old.name)) exec('DELETE FROM du_results WHERE path = ? OR path LIKE ?', old.path, old.path + '/%');
+  }
   const owners = top.map(e => ({ e, serials: serialsFromName(e.name) }));
   const match = (wanted) => owners.filter(({ serials }) => [...serials].some(s => wanted.has(s)));
   const out = [];
@@ -27,7 +32,8 @@ export async function resolveRemoval(sourceId, postIds, { sizes = true } = {}) {
     out.push(g);
     let wanted = new Set([p.serial, ...(p.share_serials || '').split(',')].filter(Boolean));
     let hits = match(wanted), unsure = false;
-    if (!hits.length && p.share_serials == null) {
+    const hasSaved = !!one(`SELECT 1 FROM links WHERE source_id = ? AND post_id = ? AND status IN ('saved', 'exists')`, sourceId, p.post_id);
+    if (!hits.length && p.share_serials == null && hasSaved) {
       const found = await shareSerials(sourceId, p.post_id);
       unsure = !found;
       if (found) {
@@ -65,7 +71,7 @@ async function shareSerials(sourceId, postId) {
 }
 
 // 删除后：链接恢复为可入盘，多版本里没选中的保持跳过
-function resetLinks(sourceId, postId) {
+export function resetLinks(sourceId, postId) {
   const links = all(`SELECT surl, pwd, remark, status FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid`, sourceId, postId);
   const picked = links.some(l => l.remark === null) ? links.map(l => ({ ...l, chosen: true })) : pickLinks(links);
   tx(() => {
