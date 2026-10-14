@@ -17,12 +17,11 @@ export async function accountStatus({ fresh = false } = {}) {
   ]);
   const data = {
     transfer_login: who ? { ok: true, ...who } : { ok: false },
-    open_token: bd.openTokenInfo(),
     quota: q,
     user: ui,
     checked_at: new Date().toISOString(),
   };
-  if (lastLoginOk === true && !data.transfer_login.ok) notify('login_expired', 'error', '百度网盘登录已失效', '请在「设置 → 账号」里重新扫码登录');
+  if (lastLoginOk === true && !data.transfer_login.ok) notify('login_expired', 'error', '百度网盘登录已失效', '请在「设置 → 网盘账号」里重新扫码登录');
   lastLoginOk = data.transfer_login.ok;
   cache = { at: Date.now(), data };
   return data;

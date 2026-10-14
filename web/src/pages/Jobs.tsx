@@ -166,7 +166,7 @@ function NewJobDialog({ open, onClose, onCreated }: { open: boolean; onClose: ()
           </>
         )}
         {(type === 'prune' || type === 'dedupe') && (
-          <Toggle checked={pruneDry} onChange={setPruneDry} label="只列出要删的文件，不删除" hint="先看日志里的清单，确认无误后关掉这个开关再跑一次。规则在「设置 → 转存入盘」里修改。" />
+          <Toggle checked={pruneDry} onChange={setPruneDry} label="只列出要删的文件，不删除" hint="先看日志里的清单，确认无误后关掉这个开关再跑一次。规则在「设置 → 转存策略」里修改。" />
         )}
         {type === 'du' && (
           <>

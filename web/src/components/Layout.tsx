@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { X, CircleAlert, CircleCheck, Info, TriangleAlert, Pause, Play, Square } from 'lucide-react';
 import { useLive, useLiveProgress } from '../lib/live';
-import { useAccount, useJobAction, useOverview } from '../lib/hooks';
+import { useAccount, useJobAction, useOverview, useSetup } from '../lib/hooks';
 import { bytes } from '../lib/format';
 import type { Job } from '../lib/api';
 import { PHASE } from './JobCard';
@@ -13,6 +13,7 @@ export function Layout() {
   const { toasts, dismiss } = useLive();
   const { data: acc } = useAccount();
   const { data: ov } = useOverview();
+  const setup = useSetup();
   const loc = useLocation();
   const nav = useNavigate();
   const [sp, setSp] = useSearchParams();
@@ -93,7 +94,12 @@ export function Layout() {
           </label>
 
           <div className="bar-right">
-            {q?.total ? (
+            {setup.ready && !setup.done ? (
+              <Link to="/settings" className="quota-pill text-[#ffb35c]!" title="完成必需设置后即可开始使用">
+                {setup.steps.account ? '完成初始设置' : '网盘未登录'}
+                <strong className="num">{setup.count}/3</strong>
+              </Link>
+            ) : q?.total ? (
               <Link to="/storage" className="quota-pill" title={`已用 ${bytes(q.used)} / 共 ${bytes(q.total)}`}>
                 <span>网盘剩余</span>
                 <strong className={cx(lowQuota && 'text-[#ff8a7a]!')}>{bytes(q.free)}</strong>

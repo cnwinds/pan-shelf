@@ -86,7 +86,9 @@ schtasks /Run /TN "PS5Watch" # 手动触发计划任务
 ## 6. 架构决策与踩坑记录（重要，勿重蹈覆辙）
 
 > **2026-10-14 更新：已移除 BaiduPCS-Go。** 写操作改由 `server/baidu.mjs` 直接调用百度接口：
-> 建目录/移动/删除走 `pcs.baidu.com/rest/2.0/pcs/file?app_id=266719`（带 BDUSS），
+> 2026-10-14 起不再使用开放平台（bd_open.json 可删除）：列目录/配额/用户信息/建目录/改名/移动/删除全部走网页接口
+> `pan.baidu.com/api/{list,quota,create,filemanager}`（BDUSS+STOKEN cookie + bdstoken + 网盘客户端 UA，实测可用），
+> 网盘登录改为 passport 二维码接口纯 HTTP 扫码（server/login.mjs），不再弹浏览器。下文关于开放平台和指纹墙的记录均已过时。
 > 转存走 `/share/verify → /s/<surl>（网盘客户端 UA 取 bdstoken/shareid/share_uk）→ /share/list → /share/transfer`。
 > 下面「为什么用 BaiduPCS-Go」的结论已过时：当年的 -6 是缺 STOKEN、缺 bdstoken 或用了浏览器 UA 访问分享页导致的，不是 TLS 指纹问题。
 

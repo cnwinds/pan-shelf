@@ -1,12 +1,10 @@
-// 百度盘操作（纯 Node.js HTTP 实现，无外部二进制依赖）：
-//   转存                     → pan.baidu.com/share/{verify,list,transfer}（携带 BDUSS + STOKEN + Netdisk UA）
-//   改名 / 移动 / 删除 / 建目录 → pcs.baidu.com/rest/2.0/pcs/file?app_id=266719（携带 BDUSS）
-//   列表 / 配额 / 用户信息    → xpan 开放平台（bd_open.json，access_token 自动续期）
+// 百度盘操作（纯 Node.js HTTP 实现，无外部二进制依赖），全部只用网盘登录态（bduss.txt 的 BDUSS + STOKEN）：
+//   列表 / 配额 / 用户信息 / 建目录 / 改名 / 移动 / 删除 → pan.baidu.com/api/*（网页接口，带 bdstoken）
+//   转存 → pan.baidu.com/share/{verify,list,transfer}（Netdisk UA 取 bdstoken / shareid / share_uk）
 import fs from 'node:fs';
-import { BDUSS_FILE, OPEN_FILE } from './paths.mjs';
+import { BDUSS_FILE } from './paths.mjs';
 import { Mutex, sleep } from './util.mjs';
 
-const PCS_APP_ID = '266719';
 const XPAN_APP_ID = '250528';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 // 百度分享页对普通浏览器 UA 会弹登录重定向而隐藏 window.locals；使用网盘客户端 UA 可直接拿到 bdstoken / shareid / share_uk
@@ -34,26 +32,30 @@ function cookieHeader(extra = '') {
   return `BDUSS=${c.bduss}` + (c.stoken ? `; STOKEN=${c.stoken}` : '') + (extra ? `; ${extra}` : '');
 }
 
-export async function whoami() {
-  const c = readBduss();
+async function templateVars(c) {
+  const r = await fetch(
+    `https://pan.baidu.com/api/gettemplatevariable?clienttype=0&app_id=${XPAN_APP_ID}&web=1&fields=%5B%22bdstoken%22,%22username%22,%22uk%22%5D`,
+    {
+      signal: AbortSignal.timeout(15000),
+      headers: {
+        'user-agent': NETDISK_UA,
+        referer: 'https://pan.baidu.com/disk/home',
+        cookie: `BDUSS=${c.bduss}` + (c.stoken ? `; STOKEN=${c.stoken}` : ''),
+      },
+    },
+  );
+  const j = await r.json();
+  return j.errno === 0 && j.result?.bdstoken ? j.result : null;
+}
+
+export async function whoami(creds = null) {
+  const c = creds || readBduss();
   if (!c?.bduss) return null;
   try {
-    const r = await fetch(
-      `https://pan.baidu.com/api/gettemplatevariable?clienttype=0&app_id=${XPAN_APP_ID}&web=1&fields=%5B%22bdstoken%22,%22username%22,%22uk%22%5D`,
-      {
-        signal: AbortSignal.timeout(15000),
-        headers: {
-          'user-agent': NETDISK_UA,
-          referer: 'https://pan.baidu.com/disk/home',
-          cookie: `BDUSS=${c.bduss}` + (c.stoken ? `; STOKEN=${c.stoken}` : ''),
-        },
-      },
-    );
-    const j = await r.json();
-    if (j.errno === 0 && j.result?.bdstoken) {
-      return { uid: String(j.result.uk || ''), name: String(j.result.username || '已登录').trim() };
-    }
-    return null;
+    const v = await templateVars(c);
+    if (!v) return null;
+    if (!creds) tokenCache = { bduss: c.bduss, bdstoken: v.bdstoken };
+    return { uid: String(v.uk || ''), name: String(v.username || '已登录').trim() };
   } catch {
     return null;
   }
@@ -63,82 +65,77 @@ export async function verifyLogin() {
   return Boolean(await whoami());
 }
 
-// ---------- 开放平台 token ----------
-function loadOpen() {
-  if (!fs.existsSync(OPEN_FILE)) return null;
-  const j = JSON.parse(fs.readFileSync(OPEN_FILE, 'utf8'));
-  j.expires_at = j.expires_at || (Date.now() + (j.expires_in || 2592000) * 1000 - 86400000);
-  return j;
+// bdstoken 跟着 BDUSS 走，重新登录后自动失效重取
+let tokenCache = { bduss: '', bdstoken: '' };
+async function bdstoken() {
+  const c = readBduss();
+  if (!c?.bduss) throw new Error('网盘未登录，请在「设置 → 网盘账号」里扫码登录');
+  if (tokenCache.bduss === c.bduss && tokenCache.bdstoken) return tokenCache.bdstoken;
+  const v = await templateVars(c);
+  if (!v) throw new Error('网盘登录已失效，请在「设置 → 网盘账号」里重新扫码登录');
+  tokenCache = { bduss: c.bduss, bdstoken: v.bdstoken };
+  return v.bdstoken;
 }
 
-export function openTokenInfo() {
-  const j = loadOpen();
-  if (!j) return { configured: false };
-  return { configured: true, expires_at: new Date(j.expires_at).toISOString(), can_refresh: !!j.refresh_token, scope: j.scope };
-}
-
-export async function refreshOpenToken() {
-  const j = loadOpen();
-  if (!j?.refresh_token) throw new Error('bd_open.json 缺少 refresh_token');
-  const r = await fetch(`https://openapi.baidu.com/oauth/2.0/token?grant_type=refresh_token&refresh_token=${j.refresh_token}&client_id=${j.client_id}&client_secret=${j.client_secret}`);
-  const t = await r.json();
-  if (!t.access_token) throw new Error('token 刷新失败: ' + JSON.stringify(t).slice(0, 120));
-  t.client_id = j.client_id; t.client_secret = j.client_secret;
-  t.expires_at = Date.now() + (t.expires_in || 2592000) * 1000 - 86400000;
-  fs.writeFileSync(OPEN_FILE, JSON.stringify(t, null, 1));
-  return t.access_token;
-}
-
-async function accessToken() {
-  const j = loadOpen();
-  if (!j) throw new Error('缺少 bd_open.json（开放平台授权）');
-  if (Date.now() > j.expires_at && j.refresh_token) return refreshOpenToken();
-  return j.access_token;
-}
-
-async function xpanGet(url, { tries = 4 } = {}) {
+// 调用网盘网页接口。form 为空时发 GET；读接口在网络错误/空响应时重试
+async function panApi(path, { query = {}, form = null, tries = form ? 1 : 4, timeoutSec = 30, signal } = {}) {
+  const qs = new URLSearchParams({ clienttype: '0', app_id: XPAN_APP_ID, web: '1', bdstoken: await bdstoken(), ...query });
   let lastErr;
   for (let t = 0; t < tries; t++) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      const r = await fetch(`https://pan.baidu.com${path}${path.includes('?') ? '&' : '?'}${qs}`, {
+        method: form ? 'POST' : 'GET',
+        headers: {
+          'user-agent': NETDISK_UA,
+          referer: 'https://pan.baidu.com/disk/home',
+          cookie: cookieHeader(),
+          ...(form ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
+        },
+        body: form ? new URLSearchParams(form).toString() : undefined,
+        signal: withTimeout(timeoutSec, signal),
+      });
       const txt = await r.text();
       if (!txt.trim()) throw new Error('空响应（限流）');
-      return JSON.parse(txt);
+      const j = JSON.parse(txt);
+      if (j.errno === -6) {
+        tokenCache = { bduss: '', bdstoken: '' };
+        throw new Error('网盘登录已失效，请在「设置 → 网盘账号」里重新扫码登录');
+      }
+      return j;
     } catch (e) {
+      if (signal?.aborted) throw signal.reason;
       lastErr = e;
-      await sleep(1000 * 2 ** t);
+      if (/登录/.test(e.message)) break;
+      if (t < tries - 1) await sleep(1000 * 2 ** t);
     }
   }
   throw lastErr;
 }
 
+// ---------- 读接口 ----------
 export async function quota() {
-  const at = await accessToken();
-  const j = await xpanGet(`https://pan.baidu.com/api/quota?access_token=${at}&checkfree=1&checkexpire=1`);
+  const j = await panApi('/api/quota', { query: { checkfree: '1', checkexpire: '1' } });
   if (j.errno !== 0) throw new Error('配额查询失败 errno=' + j.errno);
   return { total: j.total, used: j.used, free: j.free ?? (j.total - j.used) };
 }
 
 export async function userInfo() {
-  const at = await accessToken();
-  const j = await xpanGet(`https://pan.baidu.com/rest/2.0/xpan/nas?method=uinfo&access_token=${at}`);
+  const j = await panApi('/rest/2.0/xpan/nas?method=uinfo');
   if (j.errno !== 0) throw new Error('用户信息查询失败 errno=' + j.errno);
   return { name: j.baidu_name, avatar: j.avatar_url, vip_type: j.vip_type };
 }
 
 // 列目录（自动翻页）。目录不存在返回 null。
 export async function listDir(dir) {
-  const at = await accessToken();
   const out = [];
-  for (let start = 0; ; start += 1000) {
-    const j = await xpanGet('https://pan.baidu.com/rest/2.0/xpan/file?method=list&access_token=' + at +
-      '&dir=' + encodeURIComponent(dir) + '&order=name&desc=0&start=' + start + '&limit=1000&web=1');
+  for (let page = 1; ; page++) {
+    const j = await panApi('/api/list', { query: { dir, page: String(page), num: '1000', order: 'name', desc: '0' } });
     if (j.errno === -9) return null;
     if (j.errno !== 0) throw new Error(`列目录失败 ${dir} errno=${j.errno}`);
     out.push(...(j.list || []));
     if ((j.list || []).length < 1000) break;
   }
-  return out.map(e => ({ name: e.server_filename, isdir: !!e.isdir, size: e.size || 0, mtime: e.server_mtime, path: e.path }));
+  return out.map(e => ({ name: e.server_filename, isdir: !!+e.isdir, size: +e.size || 0, mtime: e.server_mtime, path: e.path }));
 }
 
 // ---------- 分享内容（匿名，凭提取码） ----------
@@ -188,60 +185,56 @@ export async function listShare(surl, pwd, { delayMs = 400 } = {}) {
   }
 }
 
-// ---------- 写操作（PCS 接口 + 网页分享转存接口） ----------
-async function pcsFile(method, { query = {}, param = null, timeoutSec = 120, signal } = {}) {
-  const qs = new URLSearchParams({ app_id: PCS_APP_ID, method, ...query });
-  let body;
-  if (param !== null) {
-    body = new FormData();
-    body.append('param', JSON.stringify(param));
-  }
-  const r = await fetch(`https://pcs.baidu.com/rest/2.0/pcs/file?${qs}`, {
-    method: 'POST',
-    headers: { 'user-agent': NETDISK_UA, cookie: cookieHeader() },
-    body,
-    signal: withTimeout(timeoutSec, signal),
+// ---------- 文件管理（建目录 / 改名 / 移动 / 删除） ----------
+// 同步执行；整体 errno 为 0 时仍要逐项检查 info
+async function fileManager(opera, filelist, { timeoutSec = 180, signal } = {}) {
+  const j = await panApi('/api/filemanager', {
+    query: { opera, async: '0', onnest: 'fail' },
+    form: { filelist: JSON.stringify(filelist), ondup: 'fail' },
+    timeoutSec,
+    signal,
   });
-  return r.json();
+  return j.errno === 0 && (j.info || []).every(x => !x.errno);
 }
 
+const splitPath = (p) => {
+  const i = p.lastIndexOf('/');
+  return { dir: p.slice(0, i) || '/', name: p.slice(i + 1) };
+};
+
+async function guardedWrite(fn, signal) {
+  return writeLock.run(async () => {
+    try {
+      return await fn();
+    } catch (e) {
+      if (signal?.aborted) throw signal.reason;
+      return false;
+    }
+  });
+}
+
+// dst 是完整目标路径（可同时改名）；目标已存在时失败
 export async function mv(src, dst, signal) {
-  return writeLock.run(async () => {
-    try {
-      const j = await pcsFile('move', { param: { list: [{ from: src, to: dst }] }, timeoutSec: 180, signal });
-      return !j.error_code;
-    } catch (e) {
-      if (signal?.aborted) throw signal.reason;
-      return false;
-    }
-  });
+  const { dir, name } = splitPath(dst);
+  return guardedWrite(() => fileManager('move', [{ path: src, dest: dir, newname: name }], { signal }), signal);
 }
 
+// 路径不存在也视为删除成功
 export async function rm(paths, signal) {
-  return writeLock.run(async () => {
-    try {
-      const j = await pcsFile('delete', { param: { list: paths.map(path => ({ path })) }, timeoutSec: 180, signal });
-      // 31066 = 文件或目录不存在（幂等视为已删）
-      return !j.error_code || j.error_code === 31066;
-    } catch (e) {
-      if (signal?.aborted) throw signal.reason;
-      return false;
-    }
-  });
+  return guardedWrite(() => fileManager('delete', paths, { signal }), signal);
+}
+
+async function mkdirRaw(dir, signal) {
+  const j = await panApi('/api/create', { query: { a: 'commit' }, form: { path: dir, isdir: '1', block_list: '[]', rtype: '0' }, timeoutSec: 60, signal });
+  // -8 = 目录已存在
+  return { ok: j.errno === 0 || j.errno === -8, errno: j.errno };
 }
 
 export async function mkdir(dir, signal) {
-  return writeLock.run(async () => {
-    try {
-      const j = await pcsFile('mkdir', { query: { path: dir }, timeoutSec: 60, signal });
-      // 31061 = 目录已存在
-      return !j.error_code || j.error_code === 31061;
-    } catch (e) {
-      if (signal?.aborted) throw signal.reason;
-      return false;
-    }
-  });
+  return guardedWrite(async () => (await mkdirRaw(dir, signal)).ok, signal);
 }
+
+// ---------- 分享转存 ----------
 
 // 转存一个分享到 destDir。返回 { status, detail }
 // status: saved | exists | invalid | err_quota | err_pwd | err_<code> | exc
@@ -249,9 +242,9 @@ export async function transferOne(surl, pwd, destDir, { timeoutSec = 180, signal
   return writeLock.run(async () => {
     const sig = withTimeout(timeoutSec, signal);
     try {
-      const dirRes = await pcsFile('mkdir', { query: { path: destDir }, timeoutSec: 60, signal: sig });
-      if (dirRes.error_code && dirRes.error_code !== 31061) {
-        return { status: 'err_cd', detail: `目标目录不可用 (${dirRes.error_code}): ${dirRes.error_msg || destDir}`.slice(0, 160) };
+      const dirRes = await mkdirRaw(destDir, sig);
+      if (!dirRes.ok) {
+        return { status: 'err_cd', detail: `目标目录不可用 (errno=${dirRes.errno}): ${destDir}`.slice(0, 160) };
       }
 
       const short = String(surl).replace(/^1/, '');

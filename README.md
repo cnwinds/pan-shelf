@@ -30,7 +30,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1 -Uninstal
 | 游戏库 | 按游戏名 / 编号搜索；加入网盘、从网盘删除（先预览再确认）、重新采集、跳过 |
 | 任务 | 所有任务的实时进度、速度、预计剩余时间和日志；暂停 / 继续 / 取消 / 重新运行 |
 | 网盘 | 空间与用量（逐层深挖）；目录规整（先预览、勾选，再执行） |
-| 设置 | 采集节奏、转存入盘、规整规则、定时运行、通知、来源管理、扫码登录 |
+| 设置 | 快速开始引导；必需设置（网盘账号、采集来源、转存目录）；可选设置（采集节奏、转存策略、目录规整、定时运行、通知，默认值即可用） |
 
 ## 关键行为
 
@@ -38,7 +38,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1 -Uninstal
   连续失败达到阈值判定为封禁，采集自动停止，之后按间隔探测，恢复后自动重新采集。
 - **全量同步、按需入盘**：采集会同步站点上全部游戏（定时任务每天翻最新几页发现新帖，并补抓所有缺口），
   默认**不转存**，链接标为「可入盘」；在游戏库搜索游戏名或游戏编号，点「加入网盘」才转存。
-  想恢复「采到就存」，在「设置 → 转存入盘」打开自动转存。
+  想恢复「采到就存」，在「设置 → 转存策略」打开自动转存。
 - **从网盘删除游戏**：游戏库勾选游戏 →「从网盘删除」，先按游戏编号列出网盘里对应的文件夹和大小，确认后删除；
   删掉的内容进百度网盘回收站，游戏回到「未入盘」，随时可以再加入。含多个游戏编号的文件夹不会被删。
 - **转存过程**：转存会边等边存直到采集结束。
@@ -47,10 +47,10 @@ powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1 -Uninstal
   按 exFAT > 文件夹 > 未标注 挑一个，同格式取最高版本；PKG / FPKG 和单独的补丁 / DLC 链接标为「已跳过」。
   游戏库的链接表里能看到每条链接的格式、备注和跳过原因，需要时可对单条链接手动转存。
 - **转存后清理**：每次转存有新内容后，自动删除目标目录里名称含独立 pkg / fpkg 的文件和目录，兜住备注没写清楚的情况
-  （规则在「设置 → 转存入盘」修改，存量可在任务页新建「清理排除项」）。
+  （规则在「设置 → 转存策略」修改，存量可在任务页新建「清理排除项」）。
 - **规整先预览**：转存完成后自动生成规整预览（只读），确认勾选后才执行；删除源目录前仍会验证已清空。
 - **任务可中断续跑**：所有进度落在 SQLite（`state/ps5watch.db`），服务重启后未完成的任务标记为「已中断」，重新运行即从断点继续。
-- **多来源**：在「设置 → 来源」添加其他分类或站点，每个来源有独立的游戏库和转存目录。
+- **多来源**：在「设置 → 采集来源」添加其他分类或站点，每个来源有独立的游戏库和转存目录。
 
 ## 命令行
 
@@ -80,8 +80,8 @@ server/            后端（Fastify + node:sqlite）
   scheduler.mjs    每日定时流水线 + 封禁探测
   site.mjs         站点抓取（curl + cookie jar，按域名串行限速）
   sources.mjs      来源管理与站点适配器（wp2468c / generic）
-  baidu.mjs        百度盘：纯 Node.js 实现（PCS/分享转存写 + xpan 开放平台读）
-  login.mjs        扫码登录（弹浏览器 + CDP 取 BDUSS/STOKEN）
+  baidu.mjs        百度盘：纯 Node.js 实现，全部走网页接口，只依赖网盘登录态（BDUSS/STOKEN）
+  login.mjs        扫码登录（passport 二维码接口，纯 HTTP 取 BDUSS/STOKEN，无需浏览器）
   notify.mjs       站内消息 / Windows 通知 / Webhook
   settings.mjs     参数默认值与校验
   tasks/           crawl（含 probe）、transfer、normalize（plan/exec）、du
@@ -89,7 +89,7 @@ web/               前端（Vite + React + TypeScript + Tailwind），构建产�
 ps5watch.mjs       命令行
 scripts/           开机自启脚本
 state/             数据库、cookie、浏览器配置、日志
-bduss.txt, bd_open.json   ★ 百度账号凭据，勿外传
+bduss.txt          ★ 百度网盘登录凭据，勿外传
 ```
 
 ## 开发

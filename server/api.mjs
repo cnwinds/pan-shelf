@@ -5,7 +5,7 @@ import { listSources, getSource, saveSource, deleteSource, ADAPTERS } from './so
 import * as jobs from './jobs.mjs';
 import { runPipeline, nextRuns } from './scheduler.mjs';
 import { accountStatus, invalidateAccount, sitesStatus } from './health.mjs';
-import { startLogin, cancelLogin, loginState } from './login.mjs';
+import { startLogin, cancelLogin, loginState, saveManualLogin } from './login.mjs';
 import * as bd from './baidu.mjs';
 import { toast, webhook } from './notify.mjs';
 import { duChildren } from './tasks/du.mjs';
@@ -14,6 +14,7 @@ import { serialsFromName } from './tasks/normalize.mjs';
 import { pickLinks } from './linkpick.mjs';
 import { enrichGameRow, ensureCoverFile, getCoverFile, detectImageMime, refreshStoreMeta, lookupCatalogBySerial } from './catalog.mjs';
 import { bus } from './bus.mjs';
+import { changeDestDir } from './destdir.mjs';
 
 const bad = (code, msg) => Object.assign(new Error(msg), { statusCode: code });
 
@@ -295,6 +296,10 @@ export default async function routes(app) {
   app.get('/api/sources', async () => listSources().map(s => ({ ...s, stats: sourceStats(s.id) })));
   app.post('/api/sources', async (req) => saveSource(req.body, { isNew: true }));
   app.put('/api/sources/:id', async (req) => saveSource({ ...req.body, id: req.params.id }, { isNew: false }));
+  app.post('/api/sources/:id/dest-dir', async (req) => {
+    const { dest_dir, move = true } = req.body || {};
+    return changeDestDir(req.params.id, dest_dir, { move: !!move });
+  });
   app.delete('/api/sources/:id', async (req) => {
     if (one(`SELECT id FROM jobs WHERE source_id = ? AND status IN ('queued','running','paused')`, req.params.id)) throw bad(409, '该来源还有进行中的任务');
     deleteSource(req.params.id);
@@ -415,7 +420,13 @@ export default async function routes(app) {
   app.get('/api/account', async (req) => ({ ...(await accountStatus({ fresh: req.query.fresh === '1' })), login: loginState() }));
   app.post('/api/account/login', async () => startLogin());
   app.post('/api/account/login/cancel', async () => { cancelLogin(); return loginState(); });
-  app.post('/api/account/refresh-token', async () => { await bd.refreshOpenToken(); invalidateAccount(); return bd.openTokenInfo(); });
+  app.post('/api/account/login/manual', async (req) => {
+    try {
+      return await saveManualLogin(req.body || {});
+    } catch (e) {
+      throw bad(400, e.message);
+    }
+  });
   bus.on('account-changed', invalidateAccount);
 
   // ---------- 网盘 ----------

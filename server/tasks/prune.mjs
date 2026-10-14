@@ -96,7 +96,7 @@ defineJob('prune', {
   async run(ctx) {
     const src = getSource(ctx.job.source_id);
     if (!src) throw new Error('来源不存在');
-    if (!excludeRe()) throw new Error('排除规则未启用，请先在「设置 → 转存入盘」里打开');
+    if (!excludeRe()) throw new Error('排除规则未启用，请先在「设置 → 转存策略」里打开');
     return pruneExcluded(ctx, src.dest_dir, { dry: !!ctx.job.params.dry });
   },
   onDone(job, s) {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CloudDownload,
@@ -19,7 +19,7 @@ import {
   Undo2,
 } from 'lucide-react';
 import { api, type Game, type Job, type PanState, type RemovalPreview } from '../lib/api';
-import { useAccount, useSources } from '../lib/hooks';
+import { useAccount, useSetup, useSources } from '../lib/hooks';
 import { Chip, Empty, ErrorNote, Modal, cx, linkStatus } from '../components/ui';
 import { bytes, dateTime } from '../lib/format';
 
@@ -88,6 +88,7 @@ export function Games() {
   const [sp, setSp] = useSearchParams();
   const { data: sources } = useSources();
   const { data: acc } = useAccount();
+  const setup = useSetup();
   const sourceId = sp.get('source') || sources?.find(s => s.enabled)?.id || sources?.[0]?.id || '';
   const view = sp.get('view') || 'all';
   const sort = sp.get('sort') || 'pan_first';
@@ -367,6 +368,13 @@ export function Games() {
 
       {games.isLoading ? (
         <div className="py-20 text-center text-muted">正在加载游戏封面库…</div>
+      ) : rows.length === 0 && setup.ready && !setup.done && !q ? (
+        <div className="panel py-16">
+          <Empty title="先完成初始设置">
+            登录百度网盘、添加采集来源、确认转存目录，三步就能开始采集游戏。
+            <div className="mt-4"><Link to="/settings" className="btn btn-primary">去设置（已完成 {setup.count}/3）</Link></div>
+          </Empty>
+        </div>
       ) : rows.length === 0 ? (
         <div className="panel py-16">
           <Empty title="没有找到匹配的游戏">

@@ -6,6 +6,18 @@ export const useAccount = (fresh = false) => useQuery({ queryKey: ['account', fr
 export const useSources = () => useQuery({ queryKey: ['sources'], queryFn: () => api.get<Source[]>('/sources') });
 export const useSettings = () => useQuery({ queryKey: ['settings'], queryFn: () => api.get<{ settings: Settings; defaults: Settings }>('/settings') });
 
+export function useSetup() {
+  const { data: acc } = useAccount();
+  const { data: sources } = useSources();
+  const steps = {
+    account: !!acc?.transfer_login.ok,
+    sources: !!sources?.length,
+    dest: !!sources?.length && sources.every(s => !!s.dest_dir),
+  };
+  const count = Object.values(steps).filter(Boolean).length;
+  return { ready: !!acc && !!sources, steps, count, done: count === 3, acc, sources };
+}
+
 export function useJobAction() {
   const qc = useQueryClient();
   return useMutation({

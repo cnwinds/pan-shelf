@@ -1,28 +1,33 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Pencil, QrCode, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ArrowRight, Check, Folder, Play, Plus, Trash2, Pencil, QrCode, RefreshCw, RotateCcw, Send, Sparkles, TriangleAlert, X } from 'lucide-react';
 import { api, type Settings, type Source } from '../lib/api';
-import { useAccount, useOverview, useSettings, useSources } from '../lib/hooks';
+import { useAccount, useOverview, useSettings, useSetup, useSources } from '../lib/hooks';
 import { ErrorNote, Field, Modal, PageHeader, Toggle, cx } from '../components/ui';
-import { dateTime, duration, bytes } from '../lib/format';
+import { duration, bytes } from '../lib/format';
 
-const TABS = [
+type StepId = 'account' | 'sources' | 'dest';
+const REQUIRED: { id: StepId; label: string; title: string }[] = [
+  { id: 'account', label: '网盘账号', title: '登录百度网盘' },
+  { id: 'sources', label: '采集来源', title: '添加采集来源' },
+  { id: 'dest', label: '转存目录', title: '确认转存目录' },
+];
+const OPTIONAL: { id: keyof Settings; label: string }[] = [
   { id: 'crawl', label: '采集节奏' },
-  { id: 'transfer', label: '转存入盘' },
+  { id: 'transfer', label: '转存策略' },
   { id: 'normalize', label: '目录规整' },
   { id: 'schedule', label: '定时运行' },
   { id: 'notify', label: '通知' },
-  { id: 'sources', label: '来源' },
-  { id: 'account', label: '账号' },
 ];
 
 type Draft = Settings;
 type Setter = <K extends keyof Draft>(section: K, patch: Partial<Draft[K]>) => void;
 
 export function SettingsPage() {
-  const { tab = 'crawl' } = useParams();
+  const { tab = 'start' } = useParams();
   const { data } = useSettings();
+  const setup = useSetup();
   const [draft, setDraft] = useState<Draft | null>(null);
   const qc = useQueryClient();
   useEffect(() => { if (data && !draft) setDraft(structuredClone(data.settings)); }, [data, draft]);
@@ -32,21 +37,39 @@ export function SettingsPage() {
     onSuccess: (r) => { qc.setQueryData(['settings'], { ...data, settings: r.settings }); setDraft(structuredClone(r.settings)); },
   });
   const set: Setter = (section, patch) => setDraft(d => d && ({ ...d, [section]: { ...d[section], ...patch } }));
-  const isForm = !['sources', 'account'].includes(tab);
+  const optional = OPTIONAL.find(o => o.id === tab);
+  const navCls = (active: boolean) => cx('flex items-center gap-2 rounded-lg px-3 py-2 text-[14px] whitespace-nowrap', active ? 'bg-panel font-medium shadow-[0_0_0_1px_var(--color-line)]' : 'text-ink-2 hover:bg-line-2');
 
   return (
     <>
       <PageHeader title="设置" />
-      <div className="grid gap-6 md:grid-cols-[180px_minmax(0,1fr)]">
+      <div className="grid gap-6 md:grid-cols-[190px_minmax(0,1fr)]">
         <nav className="flex gap-1 md:flex-col max-md:overflow-x-auto">
-          {TABS.map(t => (
-            <Link key={t.id} to={`/settings/${t.id}`}
-              className={cx('rounded-lg px-3 py-2 text-[14px] whitespace-nowrap', tab === t.id ? 'bg-panel font-medium shadow-[0_0_0_1px_var(--color-line)]' : 'text-ink-2 hover:bg-line-2')}>{t.label}</Link>
+          <Link to="/settings" className={navCls(tab === 'start')}>
+            <Sparkles size={14} className="text-signal" />快速开始
+            {setup.ready && !setup.done && <span className="num ml-auto rounded-full bg-warn-soft px-1.5 text-[11px] text-warn">{setup.count}/3</span>}
+          </Link>
+          <div className="mt-3 mb-1 px-3 text-[11px] font-medium tracking-wide text-muted max-md:hidden">必需设置</div>
+          {REQUIRED.map((t, i) => (
+            <Link key={t.id} to={`/settings/${t.id}`} className={navCls(tab === t.id)}>
+              <StepDot n={i + 1} done={setup.steps[t.id]} pending={setup.ready} />{t.label}
+            </Link>
+          ))}
+          <div className="mt-3 mb-1 px-3 text-[11px] font-medium tracking-wide text-muted max-md:hidden">可选 · 默认即可用</div>
+          {OPTIONAL.map(t => (
+            <Link key={t.id} to={`/settings/${t.id}`} className={navCls(tab === t.id)}>
+              {t.label}
+              {data && JSON.stringify(data.settings[t.id]) !== JSON.stringify(data.defaults[t.id]) && <span className="ml-auto size-1.5 rounded-full bg-signal" title="已自定义" />}
+            </Link>
           ))}
         </nav>
         <div className="min-w-0 pb-24">
-          {isForm && draft && data && (
+          {tab === 'start' && <SetupGuide />}
+          {optional && draft && data && (
             <>
+              <OptionalNote
+                custom={JSON.stringify(draft[optional.id]) !== JSON.stringify(data.defaults[optional.id])}
+                onReset={() => setDraft(d => d && ({ ...d, [optional.id]: structuredClone(data.defaults[optional.id]) }))} />
               {tab === 'crawl' && <CrawlForm d={draft} def={data.defaults} set={set} />}
               {tab === 'transfer' && <TransferForm d={draft} def={data.defaults} set={set} />}
               {tab === 'normalize' && <NormalizeForm d={draft} def={data.defaults} set={set} />}
@@ -54,8 +77,9 @@ export function SettingsPage() {
               {tab === 'notify' && <NotifyForm d={draft} set={set} dirty={dirty} />}
             </>
           )}
-          {tab === 'sources' && <Sources />}
-          {tab === 'account' && <Account />}
+          {tab === 'account' && <><Account /><StepNext step="account" /></>}
+          {tab === 'sources' && <><Sources /><StepNext step="sources" /></>}
+          {tab === 'dest' && <><DestDirCard /><StepNext step="dest" /></>}
         </div>
       </div>
 
@@ -71,6 +95,163 @@ export function SettingsPage() {
         </div>
       )}
     </>
+  );
+}
+
+function StepDot({ n, done, pending, size = 18 }: { n: number; done: boolean; pending: boolean; size?: number }) {
+  return (
+    <span className={cx('num grid shrink-0 place-items-center rounded-full text-[11px] font-semibold', done ? 'bg-ok text-white' : pending ? 'bg-warn-soft text-warn' : 'bg-line-2 text-muted')}
+      style={{ width: size, height: size }}>
+      {done ? <Check size={size * 0.62} strokeWidth={3} /> : n}
+    </span>
+  );
+}
+
+// ---------- 快速开始 ----------
+function SetupGuide() {
+  const setup = useSetup();
+  const { data: settings } = useSettings();
+  const nav = useNavigate();
+  const qc = useQueryClient();
+  const run = useMutation({
+    mutationFn: () => api.post('/pipeline', {}),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['overview'] }); nav('/jobs'); },
+  });
+  const { acc, sources, steps } = setup;
+  const status: Record<StepId, { desc: string; value: ReactNode; action: string }> = {
+    account: {
+      desc: '用百度网盘 App 扫码。转存、查空间、浏览网盘目录都靠这个登录态，一般能保持几个月。',
+      value: steps.account ? <>已登录：{acc?.transfer_login.name}</> : '还没登录',
+      action: steps.account ? '查看' : '去扫码登录',
+    },
+    sources: {
+      desc: '告诉盘架去哪个网站分类找游戏。内置了 2468c 的 PS5 / PS4 预设，点一下就能添加。',
+      value: steps.sources ? <>已添加 {sources!.length} 个：{sources!.map(s => s.name).join('、')}</> : '还没有来源',
+      action: steps.sources ? '管理' : '去添加',
+    },
+    dest: {
+      desc: '游戏转存到网盘的哪个目录。游戏库也按这个目录判断哪些游戏「已入盘」，所以请确认它指向你放游戏的位置。',
+      value: steps.sources ? <span className="font-mono">{sources!.map(s => s.dest_dir).join('、')}</span> : '添加来源时设置',
+      action: '确认 / 修改',
+    },
+  };
+  const s = settings?.settings;
+
+  return (
+    <>
+      <section className="panel mb-5 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-display text-[19px] font-semibold">{setup.done ? '一切就绪' : '三步开始使用盘架'}</h2>
+            <p className="mt-1 max-w-[72ch] text-[13px] text-muted">
+              {setup.done
+                ? '必需设置都已完成，其余设置都有默认值，不改也能正常工作。'
+                : '下面三项是必需的，完成后就能采集游戏、转存进网盘。其余设置都有默认值，以后需要再调。'}
+            </p>
+          </div>
+          {setup.ready && <span className="num text-[13px] text-muted">已完成 {setup.count} / 3</span>}
+        </div>
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-line-2">
+          <div className="h-full rounded-full bg-ok transition-[width] duration-300" style={{ width: `${(setup.count / 3) * 100}%` }} />
+        </div>
+
+        <ol className="mt-5 space-y-3">
+          {REQUIRED.map((t, i) => {
+            const done = steps[t.id];
+            const blocked = t.id === 'dest' && !steps.sources;
+            const isNext = !done && REQUIRED.findIndex(x => !steps[x.id]) === i;
+            return (
+              <li key={t.id} className={cx('flex flex-wrap items-start gap-4 rounded-lg border p-4', isNext ? 'border-signal bg-signal-soft/40' : 'border-line')}>
+                <StepDot n={i + 1} done={done} pending={setup.ready} size={26} />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">{t.title}</div>
+                  <p className="mt-0.5 text-[13px] text-muted">{status[t.id].desc}</p>
+                  <div className={cx('mt-1.5 text-[13px]', done ? 'text-ok' : 'text-warn')}>{status[t.id].value}</div>
+                </div>
+                <Link to={blocked ? '/settings/sources' : `/settings/${t.id}`} className={cx('btn btn-sm self-center', isNext && 'btn-primary')}>
+                  {blocked ? '先添加来源' : status[t.id].action}<ArrowRight size={12} />
+                </Link>
+              </li>
+            );
+          })}
+        </ol>
+
+        {setup.done && (
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-ok-soft px-4 py-3">
+            <div className="text-[13px]">
+              <div className="font-medium text-ok">可以开始了</div>
+              <div className="mt-0.5 text-muted">
+                采集会把分类里的游戏收进游戏库，{s?.transfer.auto ? '并自动转存进网盘。' : '只记录信息，不占网盘空间；之后在游戏库挑想要的点「加入网盘」。'}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Link to="/" className="btn">去游戏库</Link>
+              <button className="btn btn-primary" onClick={() => run.mutate()} disabled={run.isPending}><Play size={13} />立即采集一轮</button>
+            </div>
+          </div>
+        )}
+        <ErrorNote error={run.error} />
+      </section>
+
+      {s && settings && <OptionalOverview s={s} def={settings.defaults} />}
+    </>
+  );
+}
+
+function OptionalOverview({ s, def }: { s: Settings; def: Settings }) {
+  const per = s.crawl.detail_interval_sec + s.crawl.jitter_sec / 2;
+  const summary: Record<keyof Settings, ReactNode> = {
+    crawl: <>约每 {per.toFixed(1)} 秒请求一次站点，避免被封</>,
+    transfer: <>{s.transfer.auto ? '采集到新游戏后自动转存' : '手动挑选入盘'}{s.transfer.pick_one ? '，每个游戏只收一个版本' : ''}，保底 {s.transfer.reserve_gb} GB</>,
+    normalize: <>{s.normalize.auto_plan_after_transfer ? '转存后自动生成规整预览' : '手动生成规整预览'}，确认后才执行</>,
+    schedule: s.schedule.enabled ? <>每天 {s.schedule.times.join('、') || '—'} 自动运行</> : '未开启，需要手动运行',
+    notify: <>{[s.notify.toast && '桌面通知', s.notify.webhook_url && 'Webhook'].filter(Boolean).join(' + ') || '只记录在总览页'}</>,
+  } as Record<keyof Settings, ReactNode>;
+  return (
+    <section className="panel p-5">
+      <h2 className="font-display text-[17px] font-semibold">可选设置</h2>
+      <p className="mt-1 text-[13px] text-muted">都有合理的默认值，不改也能正常工作。下面是当前生效的配置。</p>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        {OPTIONAL.map(o => {
+          const custom = JSON.stringify(s[o.id]) !== JSON.stringify(def[o.id]);
+          return (
+            <Link key={o.id} to={`/settings/${o.id}`} className="group rounded-lg border border-line px-4 py-3 hover:border-signal">
+              <div className="flex items-center gap-2 text-[14px] font-medium">
+                {o.label}
+                <span className={cx('chip text-[11px]', custom ? 'bg-signal-soft text-signal' : 'bg-line-2 text-muted')}>{custom ? '已自定义' : '默认'}</span>
+                <ArrowRight size={12} className="ml-auto text-muted group-hover:text-signal" />
+              </div>
+              <div className="mt-1 text-xs text-muted">{summary[o.id]}</div>
+            </Link>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function OptionalNote({ custom, onReset }: { custom: boolean; onReset: () => void }) {
+  return (
+    <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-paper px-4 py-2.5 text-[13px] text-muted">
+      <span>这一页是可选设置，默认值就能正常工作，按需调整即可。</span>
+      {custom && <button className="btn btn-sm" onClick={onReset}><RotateCcw size={12} />本页恢复默认</button>}
+    </div>
+  );
+}
+
+function StepNext({ step }: { step: StepId }) {
+  const setup = useSetup();
+  if (!setup.ready) return null;
+  const i = REQUIRED.findIndex(x => x.id === step);
+  const next = REQUIRED[i + 1];
+  const done = setup.steps[step];
+  return (
+    <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line px-4 py-3 text-[13px]">
+      <span className="text-muted">必需设置 第 {i + 1} / 3 步{done ? '，已完成' : ''}</span>
+      {next
+        ? <Link to={`/settings/${next.id}`} className={cx('btn btn-sm', done && 'btn-primary')}>下一步：{next.title}<ArrowRight size={12} /></Link>
+        : <Link to="/settings" className={cx('btn btn-sm', setup.done && 'btn-primary')}>{setup.done ? '完成，开始使用' : '回到快速开始'}<ArrowRight size={12} /></Link>}
+    </div>
   );
 }
 
@@ -134,7 +315,7 @@ function TransferForm({ d, def, set }: { d: Draft; def: Draft; set: Setter }) {
   const free = acc?.quota?.free;
   return (
     <>
-      <Card title="自动转存" desc="转存目录在「来源」里按来源分别设置。">
+      <Card title="自动转存">
         <div className="sm:col-span-2 space-y-4">
           <Toggle checked={t.auto} onChange={v => s({ auto: v })} label="采集到新游戏后自动存进网盘" hint="关闭（默认）时，采集只把游戏收进游戏库、标记为「未入盘」，不占网盘空间；在游戏库里搜索并点「加入网盘」才会转存。" />
           <Toggle checked={t.follow_crawl} onChange={v => s({ follow_crawl: v })} label="采集进行时，转存边等边存" hint="转存任务不会因为暂时没链接就结束，而是等采集产出新链接后继续，直到采集完成。" />
@@ -152,6 +333,109 @@ function TransferForm({ d, def, set }: { d: Draft; def: Draft; set: Setter }) {
         <Num label="每次最多转存" unit="条" value={t.max_per_run} onChange={v => s({ max_per_run: v })} def={def.transfer.max_per_run} min={0} hint="0 表示不限。" />
       </Card>
     </>
+  );
+}
+
+function DestDirCard() {
+  const { data: sources } = useSources();
+  const [editing, setEditing] = useState<Source | null>(null);
+  return (
+    <section className="panel mb-5 p-5">
+      <h2 className="font-display text-[17px] font-semibold">转存根目录</h2>
+      <p className="mt-1 max-w-[72ch] text-[13px] text-muted">游戏转存进网盘时放在哪个目录。每个来源各自一个目录，游戏库按这个目录判断哪些游戏已入盘。</p>
+      <div className="mt-4 divide-y divide-line-2 rounded-lg border border-line">
+        {sources?.map(s => (
+          <div key={s.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <div className="min-w-0">
+              <div className="text-[13px] text-muted">{s.name}</div>
+              <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[13px] text-ink"><Folder size={13} className="shrink-0 text-signal" />{s.dest_dir}</div>
+            </div>
+            <button className="btn btn-sm" onClick={() => setEditing(s)}><Pencil size={12} />修改</button>
+          </div>
+        ))}
+        {!sources?.length && <div className="px-4 py-3 text-[13px] text-muted">还没有来源。转存目录在添加来源时设置，<Link className="text-signal underline" to="/settings/sources">先去添加来源</Link>。</div>}
+      </div>
+      {editing && <DestDirDialog source={editing} onClose={() => setEditing(null)} />}
+    </section>
+  );
+}
+
+function DestDirDialog({ source, onClose }: { source: Source; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [dir, setDir] = useState(source.dest_dir);
+  const [browse, setBrowse] = useState(() => source.dest_dir.slice(0, source.dest_dir.lastIndexOf('/')) || '/');
+  const [move, setMove] = useState(true);
+  const ls = useQuery({
+    queryKey: ['storage-ls', browse],
+    queryFn: () => api.get<{ rows: { name: string; isdir: boolean; path: string }[] }>(`/storage/ls?path=${encodeURIComponent(browse)}`),
+  });
+  const save = useMutation({
+    mutationFn: () => api.post<{ dest_dir: string; moved: number; skipped: string[] }>(`/sources/${source.id}/dest-dir`, { dest_dir: dir, move }),
+    onSuccess: () => ['sources', 'overview', 'games', 'facets', 'du'].forEach(k => qc.invalidateQueries({ queryKey: [k] })),
+  });
+  const changed = dir.trim().replace(/\/+$/, '') !== source.dest_dir;
+  const crumbs = browse.split('/').filter(Boolean);
+  const dirs = (ls.data?.rows || []).filter(r => r.isdir);
+  const r = save.data;
+
+  return (
+    <Modal open onClose={onClose} title={`修改「${source.name}」的转存根目录`} width="max-w-xl"
+      footer={r
+        ? <button className="btn btn-primary" onClick={onClose}>完成</button>
+        : <><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending || !changed}>{save.isPending ? (move ? '正在搬移…' : '正在保存…') : '保存'}</button></>}>
+      {r ? (
+        <div className="space-y-2 text-[13px]">
+          <div className="rounded-lg bg-ok-soft px-3 py-2 text-ok">已改为 <span className="font-mono">{r.dest_dir}</span>{r.moved ? `，搬过去 ${r.moved} 项` : ''}</div>
+          {r.skipped.length > 0 && (
+            <div className="rounded-lg bg-warn-soft px-3 py-2 text-warn">
+              新目录里已有同名项，以下 {r.skipped.length} 项留在了原目录 {source.dest_dir}：{r.skipped.slice(0, 8).join('、')}{r.skipped.length > 8 ? ' 等' : ''}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <Field label="网盘目录" hint="可以直接输入路径，不存在的目录会自动创建；也可以在下面浏览网盘点选。">
+            <input className="field font-mono text-[13px]" value={dir} onChange={e => setDir(e.target.value)} placeholder="/游戏资源/PS5" />
+          </Field>
+
+          <div className="rounded-lg border border-line">
+            <div className="flex flex-wrap items-center gap-1 border-b border-line px-3 py-2 text-xs">
+              <button type="button" className="text-signal hover:underline" onClick={() => setBrowse('/')}>网盘</button>
+              {crumbs.map((c, i) => (
+                <span key={i} className="flex items-center gap-1">
+                  <span className="text-muted">/</span>
+                  <button type="button" className="text-signal hover:underline" onClick={() => setBrowse('/' + crumbs.slice(0, i + 1).join('/'))}>{c}</button>
+                </span>
+              ))}
+              {browse !== '/' && <button type="button" className="ml-auto btn btn-sm" onClick={() => setDir(browse)}>选用这个目录</button>}
+            </div>
+            <div className="max-h-56 overflow-y-auto">
+              {ls.isLoading && <div className="px-3 py-2 text-xs text-muted">正在读取…</div>}
+              {ls.error && <div className="px-3 py-2 text-xs text-bad">{(ls.error as Error).message}</div>}
+              {!ls.isLoading && !ls.error && dirs.length === 0 && <div className="px-3 py-2 text-xs text-muted">没有子目录</div>}
+              {dirs.map(d => (
+                <div key={d.path} className={cx('flex items-center justify-between gap-2 px-3 py-1.5 text-[13px] hover:bg-line-2', d.path === dir && 'bg-signal-soft')}>
+                  <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => setBrowse(d.path)}>
+                    <Folder size={13} className="shrink-0 text-signal" /><span className="truncate">{d.name}</span>
+                  </button>
+                  <button type="button" className="text-xs text-signal hover:underline" onClick={() => setDir(d.path)}>选用</button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {changed && (
+            <div className="space-y-2">
+              <Toggle checked={move} onChange={setMove} label={<>把 <span className="font-mono">{source.dest_dir}</span> 里的游戏一起搬到新目录</>}
+                hint={move
+                  ? '新目录不存在时整体改名，瞬间完成；已存在时逐个移动，同名的会留在原目录，不覆盖。'
+                  : '不搬的话，原目录里的游戏在游戏库会显示为「未入盘」，之后转存会放进新目录。'} />
+            </div>
+          )}
+          <ErrorNote error={save.error} />
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -294,6 +578,12 @@ function NotifyForm({ d, set, dirty }: { d: Draft; set: Setter; dirty: boolean }
 }
 
 // ---------- 来源 ----------
+const PRESETS: { label: string; source: Partial<Source> }[] = [
+  { label: '2468c · PS5', source: { id: '2468c-ps5', name: '奥德彪计划 · PS5', adapter: 'wp2468c', base_url: 'https://2468c.com', category_path: '/ps5game', dest_dir: '/游戏资源/PS5', enabled: true, options: { title_suffix: '-奥德彪计划' } } },
+  { label: '2468c · PS4', source: { id: '2468c-ps4', name: '奥德彪计划 · PS4', adapter: 'wp2468c', base_url: 'https://2468c.com', category_path: '/ps4game', dest_dir: '/游戏资源/PS4', enabled: true, options: { title_suffix: '-奥德彪计划' } } },
+];
+const BLANK_SOURCE: Partial<Source> = { adapter: 'wp2468c', enabled: true, options: {} };
+
 function Sources() {
   const { data: sources } = useSources();
   const [editing, setEditing] = useState<Partial<Source> | null>(null);
@@ -309,10 +599,19 @@ function Sources() {
           <h2 className="font-display text-[17px] font-semibold">来源</h2>
           <p className="mt-1 max-w-[72ch] text-[13px] text-muted">每个来源是一个要监控的网站分类，各自有独立的游戏库和转存目录。同一个网站的多个来源共用一条请求队列。</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setEditing({ adapter: 'wp2468c', enabled: true, options: {} })}><Plus size={14} />添加来源</button>
+        <button className={cx('btn', !!sources?.length && 'btn-primary')} onClick={() => setEditing(BLANK_SOURCE)}><Plus size={14} />添加来源</button>
       </div>
       <ErrorNote error={del.error} />
-      <div className="mt-4 divide-y divide-line-2 rounded-lg border border-line">
+      {sources && !sources.length && (
+        <div className="mt-4 rounded-lg border border-signal bg-signal-soft/40 p-4">
+          <div className="text-[14px] font-medium">从预设开始</div>
+          <p className="mt-0.5 text-[13px] text-muted">选一个预设，确认一下转存目录就能保存；也可以点右上角「添加来源」手动填写。</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {PRESETS.map(p => <button key={p.label} className="btn btn-primary btn-sm" onClick={() => setEditing({ ...p.source })}><Plus size={12} />{p.label}</button>)}
+          </div>
+        </div>
+      )}
+      <div className={cx('mt-4 divide-y divide-line-2 rounded-lg border border-line', !sources?.length && 'hidden')}>
         {sources?.map(s => (
           <div key={s.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
             <div className="min-w-0">
@@ -342,15 +641,27 @@ function SourceDialog({ initial, onClose }: { initial: Partial<Source>; onClose:
   });
   const set = (p: Partial<Source>) => setF(x => ({ ...x, ...p }));
   const opt = (k: string, v: string) => setF(x => ({ ...x, options: { ...(x.options || {}), [k]: v } }));
+  const { data: sources } = useSources();
+  const presets = PRESETS.filter(p => !sources?.some(s => s.id === p.source.id));
   return (
     <Modal open onClose={onClose} title={isNew ? '添加来源' : `编辑「${initial.name}」`} width="max-w-xl"
       footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>保存</button></>}>
+      {isNew && presets.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-[13px]">
+          <span className="text-muted">套用预设：</span>
+          {presets.map(p => <button key={p.label} type="button" className={cx('btn btn-sm', f.id === p.source.id && 'btn-primary')} onClick={() => setF({ ...p.source })}>{p.label}</button>)}
+        </div>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="名称"><input className="field" value={f.name || ''} onChange={e => set({ name: e.target.value })} placeholder="例如：奥德彪计划 · PS4" /></Field>
         <Field label="ID" hint={isNew ? '小写字母、数字和连字符，创建后不能修改' : undefined}><input className="field font-mono" value={f.id || ''} disabled={!isNew} onChange={e => set({ id: e.target.value })} placeholder="2468c-ps4" /></Field>
         <Field label="站点地址"><input className="field" value={f.base_url || ''} onChange={e => set({ base_url: e.target.value })} placeholder="https://2468c.com" /></Field>
         <Field label="分类路径"><input className="field" value={f.category_path || ''} onChange={e => set({ category_path: e.target.value })} placeholder="/ps4game" /></Field>
-        <div className="sm:col-span-2"><Field label="转存到网盘目录" hint="不存在时会自动创建"><input className="field" value={f.dest_dir || ''} onChange={e => set({ dest_dir: e.target.value })} placeholder="/游戏资源/PS4" /></Field></div>
+        <div className="sm:col-span-2">
+          {isNew
+            ? <Field label="转存到网盘目录" hint="游戏会存进这个目录，游戏库也按它判断哪些已入盘。不存在时会自动创建，以后可在「设置 → 转存目录」修改。"><input className="field" value={f.dest_dir || ''} onChange={e => set({ dest_dir: e.target.value })} placeholder="/游戏资源/PS4" /></Field>
+            : <Field label="转存到网盘目录" hint={<>修改请到 <Link className="underline" to="/settings/dest" onClick={onClose}>设置 → 转存目录</Link>，可以把已入盘的游戏一起搬过去</>}><input className="field" value={f.dest_dir || ''} disabled /></Field>}
+        </div>
         <Field label="站点类型">
           <select className="field" value={f.adapter} onChange={e => set({ adapter: e.target.value })}>
             <option value="wp2468c">WordPress 分类（2468c 等）</option>
@@ -382,17 +693,29 @@ function Account() {
   const qc = useQueryClient();
   const login = useMutation({ mutationFn: () => api.post('/account/login'), onSuccess: () => qc.invalidateQueries({ queryKey: ['account'] }) });
   const cancel = useMutation({ mutationFn: () => api.post('/account/login/cancel') });
-  const refresh = useMutation({ mutationFn: () => api.post('/account/refresh-token'), onSuccess: () => qc.invalidateQueries({ queryKey: ['account'] }) });
   const ls = acc?.login;
-  const waiting = ls && ['starting', 'waiting'].includes(ls.status);
+  const waiting = ls && ['starting', 'waiting', 'scanned'].includes(ls.status);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manual, setManual] = useState({ bduss: '', stoken: '' });
+  const saveManual = useMutation({
+    mutationFn: () => api.post('/account/login/manual', manual),
+    onSuccess: () => { setManual({ bduss: '', stoken: '' }); setManualOpen(false); qc.invalidateQueries({ queryKey: ['account'] }); },
+  });
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!waiting) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [waiting]);
+  const left = ls?.expires_at ? Math.max(0, Math.round((Date.parse(ls.expires_at) - now) / 1000)) : 0;
 
   return (
     <>
       <section className="panel mb-5 p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="font-display text-[17px] font-semibold">网盘登录（转存用）</h2>
-            <p className="mt-1 max-w-[72ch] text-[13px] text-muted">转存、改名、移动、删除直接调用百度网盘接口（基于 bduss.txt 的 BDUSS/STOKEN 登录态）。登录态一般能保持几个月，失效时会通知你。</p>
+            <h2 className="font-display text-[17px] font-semibold">百度网盘登录</h2>
+            <p className="mt-1 max-w-[72ch] text-[13px] text-muted">转存、浏览目录、查空间、删除和规整都使用这一个登录态（保存在 bduss.txt）。用百度网盘 App 扫码即可，一般能保持几个月，失效时会通知你重新扫码。</p>
           </div>
           <button className="btn btn-sm" onClick={() => { setFresh(true); refetch(); }} disabled={isFetching}><RefreshCw size={12} className={cx(isFetching && 'animate-spin')} />重新检查</button>
         </div>
@@ -401,30 +724,49 @@ function Account() {
           <div className="flex-1">
             {acc?.transfer_login.ok
               ? <><div className="font-medium">{acc.transfer_login.name}</div><div className="text-xs text-ok">登录有效</div></>
-              : <><div className="font-medium">未登录</div><div className="text-xs text-bad">转存和规整暂时无法使用</div></>}
+              : <><div className="font-medium">未登录</div><div className="text-xs text-bad">转存、目录浏览、删除和规整都无法使用</div></>}
           </div>
           {waiting
             ? <button className="btn" onClick={() => cancel.mutate()}>取消登录</button>
             : <button className={cx('btn', !acc?.transfer_login.ok && 'btn-primary')} onClick={() => login.mutate()} disabled={login.isPending}><QrCode size={14} />{acc?.transfer_login.ok ? '重新扫码登录' : '扫码登录'}</button>}
         </div>
-        {ls && ls.status !== 'idle' && (
+        {waiting && ls?.qrcode_url ? (
+          <div className="mt-4 flex flex-wrap items-center gap-5 rounded-lg border border-line bg-shell p-4">
+            <div className="relative">
+              <img src={ls.qrcode_url} alt="网盘登录二维码" className={cx('size-40 rounded-md bg-white p-2', ls.status === 'scanned' && 'opacity-30')} referrerPolicy="no-referrer" />
+              {ls.status === 'scanned' && <div className="absolute inset-0 grid place-items-center text-[13px] font-semibold text-ok">已扫码</div>}
+            </div>
+            <div className="space-y-2 text-[13px]">
+              <div className="flex items-center gap-2 font-medium"><span className="inline-block size-2 rounded-full bg-signal pulse" />{ls.message}</div>
+              <div className="text-muted">打开百度网盘 App，点右上角扫一扫。</div>
+              <div className="text-xs text-muted">二维码 {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')} 后过期</div>
+            </div>
+          </div>
+        ) : ls && ls.status !== 'idle' && (
           <div className={cx('mt-4 rounded-lg px-3 py-2 text-[13px]', ls.status === 'success' ? 'bg-ok-soft text-ok' : ls.status === 'failed' ? 'bg-bad-soft text-bad' : 'bg-signal-soft text-signal')}>
             {waiting && <span className="mr-2 inline-block size-2 rounded-full bg-current pulse" />}{ls.message}
           </div>
         )}
         <ErrorNote error={login.error} />
-      </section>
 
-      <section className="panel p-5">
-        <h2 className="font-display text-[17px] font-semibold">开放平台授权（读取目录用）</h2>
-        <p className="mt-1 max-w-[72ch] text-[13px] text-muted">列目录、查空间走百度网盘开放平台接口，授权保存在 bd_open.json。访问令牌 30 天过期，会用刷新令牌自动续期。</p>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[13px]">
-          {acc?.open_token.configured
-            ? <span>访问令牌 {dateTime(acc.open_token.expires_at)} 到期{acc.open_token.can_refresh ? '，到期前自动续期' : '，无法自动续期'}</span>
-            : <span className="text-bad">缺少 bd_open.json，目录浏览、空间查询和规整都无法使用</span>}
-          {acc?.open_token.can_refresh && <button className="btn btn-sm" onClick={() => refresh.mutate()} disabled={refresh.isPending}><RefreshCw size={12} />立即续期</button>}
+        <div className="mt-4 border-t border-line pt-3">
+          <button type="button" className="text-xs text-muted hover:text-ink" onClick={() => setManualOpen(v => !v)}>
+            {manualOpen ? '▾' : '▸'} 扫码不方便？手动填写 BDUSS / STOKEN
+          </button>
+          {manualOpen && (
+            <div className="mt-3 space-y-3">
+              <p className="text-xs text-muted">在任意电脑的浏览器登录 pan.baidu.com，按 F12 打开开发者工具 → 应用（Application）→ Cookie → https://pan.baidu.com，复制 BDUSS 和 STOKEN 的值。</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="BDUSS"><input className="field font-mono text-xs" type="password" value={manual.bduss} onChange={e => setManual(m => ({ ...m, bduss: e.target.value }))} autoComplete="off" /></Field>
+                <Field label="STOKEN"><input className="field font-mono text-xs" type="password" value={manual.stoken} onChange={e => setManual(m => ({ ...m, stoken: e.target.value }))} autoComplete="off" /></Field>
+              </div>
+              <button className="btn btn-sm" onClick={() => saveManual.mutate()} disabled={saveManual.isPending || !manual.bduss.trim() || !manual.stoken.trim()}>
+                {saveManual.isPending ? '正在校验…' : '校验并保存'}
+              </button>
+              <ErrorNote error={saveManual.error} />
+            </div>
+          )}
         </div>
-        <ErrorNote error={refresh.error} />
       </section>
     </>
   );

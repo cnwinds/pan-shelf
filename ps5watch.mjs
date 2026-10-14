@@ -72,7 +72,7 @@ async function remote(base) {
 
   if (cmd === 'check' || cmd === 'report') return printStatus(await call('GET', '/account'), sources);
   if (cmd === 'retry-failed') return say(JSON.stringify(await call('POST', '/games/actions', { action: 'retry_failed', source_id: sourceId })));
-  if (cmd === 'login') { await call('POST', '/account/login'); return say('已在本机弹出登录窗口，请扫码；进度可在控制台「设置 → 账号」查看'); }
+  if (cmd === 'login') { await call('POST', '/account/login'); return say('已生成登录二维码，请在控制台「设置 → 网盘账号」用百度网盘 App 扫码'); }
 
   const reqs = jobRequests(sourceId);
   if (!reqs) return unknown();
@@ -134,9 +134,13 @@ async function local() {
   }
   if (cmd === 'login') {
     const { startLogin, loginState } = await import('./server/login.mjs');
-    bus.on('login', s => say(s.message));
+    let shownQr = '';
+    bus.on('login', s => {
+      say(s.message);
+      if (s.qrcode_url && s.qrcode_url !== shownQr) { shownQr = s.qrcode_url; say('在浏览器打开二维码后用百度网盘 App 扫码：', s.qrcode_url); }
+    });
     await startLogin();
-    while (['starting', 'waiting'].includes(loginState().status)) await new Promise(r => setTimeout(r, 1000));
+    while (['starting', 'waiting', 'scanned'].includes(loginState().status)) await new Promise(r => setTimeout(r, 1000));
     process.exit(loginState().status === 'success' ? 0 : 1);
   }
 
@@ -170,8 +174,7 @@ async function local() {
 
 function printStatus(acc, sources, local = false) {
   const gb = (n) => (n / 1024 ** 3).toFixed(0) + ' GB';
-  say('百度盘转存登录:', acc.transfer_login.ok ? `有效 ✓（${acc.transfer_login.name}）` : '失效 ✗（运行 node ps5watch.mjs login 扫码）');
-  say('开放平台授权:', acc.open_token.configured ? `有效，到期 ${new Date(acc.open_token.expires_at).toLocaleDateString('zh-CN')}（自动续期）` : '缺少 bd_open.json');
+  say('百度网盘登录:', acc.transfer_login.ok ? `有效 ✓（${acc.transfer_login.name}）` : '失效 ✗（运行 node ps5watch.mjs login 扫码）');
   if (acc.quota?.total) say('网盘空间:', `剩余 ${gb(acc.quota.free)} / 共 ${gb(acc.quota.total)}`);
   for (const s of sources) say(`来源 ${s.name}:`, JSON.stringify(s.stats));
   if (local) process.exit(0);

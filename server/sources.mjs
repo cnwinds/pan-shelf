@@ -106,11 +106,12 @@ function check(s) {
   if (errs.length) { const e = new Error(errs.join('；')); e.statusCode = 400; throw e; }
 }
 
+// 已有来源的目录要走 changeDestDir（需要同步搬移网盘文件和缓存），这里不改
 export function saveSource(input, { isNew }) {
   const s = {
     ...input,
     base_url: String(input.base_url || '').replace(/\/+$/, ''),
-    dest_dir: String(input.dest_dir || '').replace(/\/+$/, ''),
+    dest_dir: isNew ? String(input.dest_dir || '').replace(/\/+$/, '') : getSource(input.id)?.dest_dir,
     options: input.options || {},
   };
   check(s);

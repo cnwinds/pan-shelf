@@ -8,5 +8,6 @@ state/
 # 依赖与构建产物
 node_modules/
 web/dist/
+*.tsbuildinfo
 *.log
 *.tmp.mjs

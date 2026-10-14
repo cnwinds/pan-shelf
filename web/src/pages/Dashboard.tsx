@@ -46,7 +46,7 @@ export function Dashboard() {
       )}
 
       {source ? <Pipeline ov={ov} source={source} /> : (
-        <div className="panel"><Empty title="还没有来源">到「设置 → 来源」添加要监控的网站分类。</Empty></div>
+        <div className="panel"><Empty title="还没有来源">到「设置 → 采集来源」添加要监控的网站分类。</Empty></div>
       )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -241,8 +241,7 @@ function HealthPanel({ ov }: { ov: Overview }) {
     <section>
       <h2 className="mb-3 font-display text-[18px] font-semibold">状态</h2>
       <div className="panel divide-y divide-line-2 text-[13px]">
-        <Row ok={acc?.transfer_login.ok} label="网盘转存登录" value={acc ? (acc.transfer_login.ok ? acc.transfer_login.name : <Link className="underline" to="/settings/account">去扫码登录</Link>) : '…'} />
-        <Row ok={acc?.open_token.configured} label="开放平台授权" value={acc?.open_token.expires_at ? `${dateTime(acc.open_token.expires_at)}到期，自动续期` : acc ? '缺少授权文件' : '…'} />
+        <Row ok={acc?.transfer_login.ok} label="百度网盘登录" value={acc ? (acc.transfer_login.ok ? acc.transfer_login.name : <Link className="underline" to="/settings/account">去扫码登录</Link>) : '…'} />
         <div className="px-4 py-3">
           <div className="flex justify-between"><span className="text-muted">网盘空间</span>{q?.total ? <span><span className="num">{bytes(q.free)}</span> <span className="text-muted">可用</span></span> : <span>…</span>}</div>
           {q?.total ? <Bar className="mt-2" value={q.used} max={q.total} color={q.free < 300 * 1024 ** 3 ? 'bg-bad' : 'bg-ink-2'} /> : null}

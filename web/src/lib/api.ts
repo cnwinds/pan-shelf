@@ -74,12 +74,16 @@ export interface Overview {
 
 export interface Account {
   transfer_login: { ok: boolean; uid?: string; name?: string };
-  open_token: { configured: boolean; expires_at?: string; can_refresh?: boolean; scope?: string };
   quota: Quota; user: { name: string; avatar: string; vip_type: number } | null;
   checked_at: string; login: LoginState;
 }
-export interface LoginState { status: 'idle' | 'starting' | 'waiting' | 'success' | 'failed' | 'cancelled'; message: string; at: string | null }
-
+export interface LoginState {
+  status: 'idle' | 'starting' | 'waiting' | 'scanned' | 'success' | 'failed' | 'cancelled';
+  message: string;
+  at: string | null;
+  qrcode_url?: string;
+  expires_at?: string;
+}
 export type PanState = 'in_pan' | 'queued' | 'available' | 'pending_detail' | 'failed' | 'no_link';
 
 export interface GameLink { surl: string; pwd: string; status: string; attempts: number; last_error: string | null; dest_dir: string | null; transferred_at: string | null; remark: string | null; format: 'exfat' | 'folder' | 'pkg' | 'unknown' | null }
