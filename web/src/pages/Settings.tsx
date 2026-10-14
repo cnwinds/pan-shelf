@@ -326,7 +326,7 @@ function TransferForm({ d, def, set }: { d: Draft; def: Draft; set: Setter }) {
       <Card title="自动转存">
         <div className="sm:col-span-2 space-y-4">
           <Toggle checked={t.auto} onChange={v => s({ auto: v })} label="采集到新游戏后自动存进网盘" hint="关闭（默认）时，采集只把游戏收进游戏库、标记为「未入盘」，不占网盘空间；在游戏库里搜索并点「加入网盘」才会转存。" />
-          <Toggle checked={t.follow_crawl} onChange={v => s({ follow_crawl: v })} label="采集进行时，转存边等边存" hint="转存任务不会因为暂时没链接就结束，而是等采集产出新链接后继续，直到采集完成。" />
+          <Toggle checked={t.follow_crawl} onChange={v => s({ follow_crawl: v })} label="采集进行时，转存边等边存" hint="转存任务不会因为暂时没链接就结束，而是等采集产出新链接后继续，直到采集完成。只在开启自动转存时生效。" />
         </div>
       </Card>
       <ExcludeCard t={t} def={def.transfer} s={s} />

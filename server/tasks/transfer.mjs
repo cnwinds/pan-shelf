@@ -70,7 +70,8 @@ defineJob('transfer', {
       let link = nextLink();
       if (!link) {
         const cfg = getSettings().transfer;
-        if (!only && cfg.follow_crawl && isActive('crawl', src.id)) {
+        // 不自动转存时采集只产出「可入盘」链接，等下去没有意义；加入网盘会自己启动转存
+        if (!only && cfg.auto && cfg.follow_crawl && isActive('crawl', src.id)) {
           ctx.progress({ phase: 'waiting', current: '等待采集产出新链接…', done, total: done });
           await ctx.sleep(5000);
           continue;
