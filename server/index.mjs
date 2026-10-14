@@ -39,7 +39,7 @@ if (fs.existsSync(WEB_DIST)) {
 
 const port = Number(process.env.PS5WATCH_PORT) || getSettings().server.port;
 try {
-  await app.listen({ host: '127.0.0.1', port });
+  await app.listen({ host: process.env.PS5WATCH_HOST || '127.0.0.1', port });
 } catch (e) {
   if (e.code === 'EADDRINUSE') { console.error(`端口 ${port} 已被占用，可能服务已经在运行了：http://127.0.0.1:${port}`); process.exit(1); }
   throw e;

@@ -1,0 +1,9 @@
+.git
+node_modules
+web/node_modules
+web/dist
+state
+data
+bduss.txt
+bd_open.json
+*.log

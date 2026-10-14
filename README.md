@@ -22,6 +22,17 @@ powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1 -Uninstal
 
 自启后服务在后台无窗口运行，日志写入 `state\server.log`。
 
+### Docker 部署
+
+```
+docker compose up -d --build   # → http://127.0.0.1:5175
+```
+
+数据库和网盘凭据保存在挂载目录 `./data`（`data/state/`、`data/bduss.txt`），重建容器不丢数据。
+镜像构建默认使用国内源，可用 `--build-arg NPM_REGISTRY=... --build-arg APT_MIRROR=...` 替换。
+相关环境变量：`PS5WATCH_HOST`（监听地址）、`PS5WATCH_PORT`、`PS5WATCH_STATE_DIR`、`PS5WATCH_BDUSS_FILE`。
+控制台没有登录验证，对外开放时请在反向代理上加认证。
+
 ## 页面
 
 | 页面 | 用途 |

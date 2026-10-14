@@ -4,6 +4,7 @@ bd_open.json
 
 # 数据库、cookie、浏览器配置、日志
 state/
+data/
 
 # 依赖与构建产物
 node_modules/
