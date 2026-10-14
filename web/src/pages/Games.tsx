@@ -662,6 +662,7 @@ function GameDrawer({
   const [customName, setCustomName] = useState('');
   const [copiedSurl, setCopiedSurl] = useState<string | null>(null);
   const [coverVersion, setCoverVersion] = useState(0);
+  const [introOpen, setIntroOpen] = useState(false);
 
   useEffect(() => {
     if (game) {
@@ -669,6 +670,8 @@ function GameDrawer({
       setImgFailed(false);
     }
   }, [game?.post_id, game?.custom_name]);
+
+  useEffect(() => setIntroOpen(false), [postId]);
 
   const refreshMeta = useMutation({
     mutationFn: () =>
@@ -706,7 +709,7 @@ function GameDrawer({
   const hue = hueFrom(game.serial || game.display_name || game.post_id);
   const [prefix, digits] = splitSerial(game.serial, game.post_id);
   const coverSrc = game.cover_url
-    ? `${game.cover_url}${coverVersion ? `?v=${coverVersion}` : ''}`
+    ? `${game.cover_url}${coverVersion ? `${game.cover_url.includes('?') ? '&' : '?'}r=${coverVersion}` : ''}`
     : '';
   const hasCover = Boolean(coverSrc) && !imgFailed;
 
@@ -865,16 +868,28 @@ function GameDrawer({
             )}
           </section>
 
-          {/* 游戏简介与规格 */}
-          {(game.description || game.publisher || game.genres || game.release_date || detail.isFetching) && (
-            <section className="space-y-3">
-              {detail.isFetching && !game.description ? (
-                <p className="text-xs text-muted">正在从 PlayStation 商店同步游戏资料与封面…</p>
-              ) : game.description ? (
-                <p className="m-0 max-h-48 overflow-y-auto whitespace-pre-line text-[13px] leading-[1.68] text-muted pr-1">
-                  {game.description}
+          {/* 游戏介绍与规格 */}
+          {(Number(game.concept_id) > 0 || game.description) && (
+            <section className="intro">
+              <h3 className="intro-title">游戏介绍</h3>
+              {game.description ? (
+                <>
+                  <p className={cx('intro-text', !introOpen && 'is-clamped')}>{game.description}</p>
+                  {game.description.length > 160 && (
+                    <button type="button" className="intro-more" onClick={() => setIntroOpen(v => !v)}>
+                      {introOpen ? '收起' : '展开全部'}
+                    </button>
+                  )}
+                </>
+              ) : game.meta_state === 'pending' || detail.isFetching || refreshMeta.isPending ? (
+                <p className="intro-empty">正在从 PlayStation 商店获取游戏介绍…</p>
+              ) : (
+                <p className="intro-empty">
+                  商店暂无这款游戏的介绍，可点右上角
+                  <RefreshCw size={11} className="mx-1 inline align-[-1px]" />
+                  重新获取。
                 </p>
-              ) : null}
+              )}
 
               {(game.publisher || game.genres || game.release_date) && (
                 <dl className="specs">

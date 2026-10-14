@@ -94,8 +94,13 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     on('login', () => invalidate('account'));
     on('account-changed', () => invalidate('account', 'overview'));
     on('settings', () => invalidate('settings', 'overview'));
-    on('meta', () => invalidate('game-detail'));
-    return () => es.close();
+    let metaTimer: number | null = null;
+    on('meta', () => {
+      invalidate('game-detail');
+      if (metaTimer) return;
+      metaTimer = window.setTimeout(() => { metaTimer = null; invalidate('games'); }, 2000);
+    });
+    return () => { es.close(); if (metaTimer) clearTimeout(metaTimer); };
   }, [qc]);
 
   const dismiss = (id: number) => setToasts(t => t.filter(x => x.id !== id));

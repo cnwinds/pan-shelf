@@ -1100,6 +1100,58 @@
   color: var(--text);
 }
 
+.intro {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.intro-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+  font-weight: 650;
+  color: var(--text);
+}
+.intro-title::before {
+  content: '';
+  width: 3px;
+  height: 0.95em;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #ff7ab6, #46e6ff);
+}
+.intro-text {
+  margin: 0;
+  white-space: pre-line;
+  font-size: 0.84rem;
+  line-height: 1.75;
+  color: #c3ccdb;
+}
+.intro-text.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 8;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.intro-more {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.78rem;
+  color: #7aa8ff;
+  cursor: pointer;
+}
+.intro-more:hover {
+  color: #a9c6ff;
+}
+.intro-empty {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--faint);
+}
+
 /* =========================================================
    底部浮动队列栏 (.dock)
    ========================================================= */

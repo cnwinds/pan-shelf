@@ -519,12 +519,12 @@ function pumpQueue() {
 
 async function runFetchTask(conceptId, force = false) {
   const cid = Number(conceptId);
-  if (!force) {
+  let row = one('SELECT * FROM store_meta WHERE concept_id = ?', cid);
+  if (!force && row) {
     const file = getCoverFile(cid);
     if (file) return file;
   }
 
-  let row = one('SELECT * FROM store_meta WHERE concept_id = ?', cid);
   if (!force && row && row.cover_url) {
     const downloaded = await downloadCoverToDisk(cid, row.cover_url);
     if (downloaded) {
@@ -577,7 +577,7 @@ export function ensureCoverFile(conceptId, { priority = false, force = false } =
 
   if (!force) {
     const existing = getCoverFile(cid);
-    if (existing) return Promise.resolve(existing);
+    if (existing && one('SELECT 1 FROM store_meta WHERE concept_id = ?', cid)) return Promise.resolve(existing);
   }
 
   if (inFlight.has(cid)) {
@@ -661,7 +661,8 @@ export function enrichGameRow(row, storeMetaMap = null) {
   const displayName = customName || autoName;
 
   // Serve cover via /api/cover/:conceptId whenever conceptId > 0 and not known-missing
-  const coverUrl = conceptId > 0 && !coverFailed ? `/api/cover/${conceptId}` : (cat?.coverUrl || '');
+  // v 参数随缓存状态变化，封面下载完成后列表刷新会让前端重新加载图片
+  const coverUrl = conceptId > 0 && !coverFailed ? `/api/cover/${conceptId}?v=${hasCoverFile ? 1 : 0}` : (cat?.coverUrl || '');
 
   return {
     ...row,

@@ -310,7 +310,9 @@ export default async function routes(app) {
     if (!row) throw bad(404, '游戏不存在');
     let enriched = enrichGameRow(row);
     if (enriched.concept_id > 0 && enriched.meta_state === 'pending') {
-      await ensureCoverFile(enriched.concept_id, { priority: true });
+      // 超时就先返回，资料下载完成后会推送 meta 事件让抽屉刷新
+      const fetching = ensureCoverFile(enriched.concept_id, { priority: true }).catch(() => null);
+      await Promise.race([fetching, new Promise(r => setTimeout(r, 6000))]);
       enriched = enrichGameRow(row);
     }
     const links = all('SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid', source_id, String(post_id));
@@ -356,12 +358,11 @@ export default async function routes(app) {
   app.get('/api/cover/:conceptId', async (req, reply) => {
     const cid = Number(req.params.conceptId || 0);
     if (!cid || cid <= 0) return reply.code(404).send({ error: 'invalid concept id' });
-    let file = getCoverFile(cid);
-    if (!file) {
-      file = await ensureCoverFile(cid, { priority: true });
-    }
+    const file = getCoverFile(cid);
     if (!file || !fs.existsSync(file)) {
-      return reply.code(404).send({ error: 'cover not found' });
+      // 不能等商店下载：浏览器对同一站点只有 6 个连接，一页上百张封面会把列表接口堵住
+      ensureCoverFile(cid, { priority: true }).catch(() => {});
+      return reply.code(404).header('Cache-Control', 'no-store').send({ error: 'cover not ready' });
     }
     const buf = fs.readFileSync(file);
     const mime = detectImageMime(buf);
