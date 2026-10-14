@@ -15,6 +15,7 @@ import { pickLinks } from './linkpick.mjs';
 import { enrichGameRow, ensureCoverFile, getCoverFile, detectImageMime, refreshStoreMeta, lookupCatalogBySerial } from './catalog.mjs';
 import { bus } from './bus.mjs';
 import { changeDestDir } from './destdir.mjs';
+import { panInventorySets, syncPanInventory, refreshIfStale } from './pan-inventory.mjs';
 
 const bad = (code, msg) => Object.assign(new Error(msg), { statusCode: code });
 
@@ -35,8 +36,10 @@ function sourceStats(sid) {
 // ---------- 游戏库视图 ----------
 const IN_PAN_SQL = `(
   EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status IN ('saved','exists'))
-  OR (p.serial IS NOT NULL AND EXISTS (SELECT 1 FROM du_results d JOIN sources s ON s.id = p.source_id WHERE d.parent = s.dest_dir AND UPPER(d.name) = UPPER(p.serial)))
-  OR (p.share_serials IS NOT NULL AND EXISTS (SELECT 1 FROM du_results d JOIN sources s ON s.id = p.source_id WHERE d.parent = s.dest_dir AND ',' || UPPER(p.share_serials) || ',' LIKE '%,' || UPPER(d.name) || ',%'))
+  OR EXISTS (SELECT 1 FROM pan_items i WHERE i.source_id = p.source_id AND (
+    i.serial = UPPER(p.serial)
+    OR (p.share_serials IS NOT NULL AND ',' || UPPER(p.share_serials) || ',' LIKE '%,' || i.serial || ',%')
+    OR (p.concept_id > 0 AND i.concept_id = p.concept_id)))
 )`;
 
 const VIEWS = {
@@ -70,9 +73,11 @@ function gamesQuery(q) {
 function buildPanInventory(source_id) {
   const bySerial = new Map();
   const byConcept = new Map();
+  let present = { serials: new Set(), concepts: new Set() };
   try {
     const src = source_id ? getSource(source_id) : listSources()[0];
-    if (!src?.dest_dir) return { bySerial, byConcept };
+    if (!src?.dest_dir) return { bySerial, byConcept, present };
+    present = panInventorySets(src.id);
     const rows = all('SELECT name, size FROM du_results WHERE parent = ?', src.dest_dir);
     for (const r of rows) {
       const serials = serialsFromName(r.name);
@@ -90,7 +95,17 @@ function buildPanInventory(source_id) {
       }
     }
   } catch {}
-  return { bySerial, byConcept };
+  return { bySerial, byConcept, present };
+}
+
+// 网盘清单里有这个游戏（按编号、分享里的编号或 PS Store 商品 ID）
+function inPanInventory(post, enrichedSerial, inv) {
+  const { serials, concepts } = inv?.present || {};
+  if (!serials) return false;
+  const wanted = [enrichedSerial, post?.serial, ...String(post?.share_serials || '').split(',')].map(s => String(s || '').trim().toUpperCase()).filter(Boolean);
+  if (wanted.some(s => serials.has(s))) return true;
+  const cid = Number(post?.concept_id || 0);
+  return cid > 0 && concepts.has(cid);
 }
 
 function matchPanSize(post, enrichedSerial, inv) {
@@ -138,7 +153,7 @@ async function gameDetail(source_id, row, enriched) {
   const links = all(DETAIL_LINK_SQL, source_id, String(row.post_id));
   const inv = buildPanInventory(source_id);
   const pan_size = matchPanSize(row, enriched.serial, inv);
-  const pan_state = computePanState(row, links, pan_size !== null);
+  const pan_state = computePanState(row, links, pan_size !== null || inPanInventory(row, enriched.serial, inv));
   const src = getSource(source_id);
   const pan_paths = pan_state === 'in_pan' && src?.dest_dir ? await findPanPaths(src, row, enriched.serial, links) : [];
   return { ...enriched, pan_state, pan_size, pan_paths, links };
@@ -189,7 +204,7 @@ function listGames(q) {
       const links = all(linkStmt, r.source_id, r.post_id);
       const enriched = enrichGameRow(r, storeMetaMap);
       const pan_size = matchPanSize(r, enriched.serial, inv);
-      const pan_state = computePanState(r, links, pan_size !== null);
+      const pan_state = computePanState(r, links, pan_size !== null || inPanInventory(r, enriched.serial, inv));
       return { ...enriched, pan_state, pan_size, links };
     }),
   };
@@ -296,7 +311,7 @@ export default async function routes(app) {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     res.write('retry: 3000\n\n');
     const send = (type) => (data) => res.write(`event: ${type}\ndata: ${JSON.stringify(data ?? {})}\n\n`);
-    const types = ['job', 'progress', 'log', 'event', 'site', 'login', 'settings', 'account-changed', 'schedule', 'meta'];
+    const types = ['job', 'progress', 'log', 'event', 'site', 'login', 'settings', 'account-changed', 'schedule', 'meta', 'pan_inventory'];
     const handlers = types.map(t => [t, send(t)]);
     handlers.forEach(([t, h]) => bus.on(t, h));
     const ping = setInterval(() => res.write(': ping\n\n'), 20000);
@@ -332,7 +347,9 @@ export default async function routes(app) {
   app.put('/api/sources/:id', async (req) => saveSource({ ...req.body, id: req.params.id }, { isNew: false }));
   app.post('/api/sources/:id/dest-dir', async (req) => {
     const { dest_dir, move = true } = req.body || {};
-    return changeDestDir(req.params.id, dest_dir, { move: !!move });
+    const r = await changeDestDir(req.params.id, dest_dir, { move: !!move });
+    syncPanInventory(req.params.id);
+    return r;
   });
   app.delete('/api/sources/:id', async (req) => {
     if (one(`SELECT id FROM jobs WHERE source_id = ? AND status IN ('queued','running','paused')`, req.params.id)) throw bad(409, '该来源还有进行中的任务');
@@ -341,7 +358,10 @@ export default async function routes(app) {
   });
 
   // ---------- 游戏库 ----------
-  app.get('/api/games', async (req) => listGames(req.query));
+  app.get('/api/games', async (req) => {
+    refreshIfStale(req.query.source_id || listSources()[0]?.id);
+    return listGames(req.query);
+  });
   app.get('/api/games/detail', async (req) => {
     const { source_id, post_id } = req.query || {};
     if (!source_id || !post_id) throw bad(400, '缺少参数');

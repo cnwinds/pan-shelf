@@ -114,6 +114,19 @@ CREATE TABLE IF NOT EXISTS du_results (
 );
 CREATE INDEX IF NOT EXISTS idx_du_parent ON du_results(parent);
 
+-- 网盘清单：转存目录第一层里名称带游戏编号的项（一个名字含多个编号就有多行），用来判断游戏是否已入盘
+CREATE TABLE IF NOT EXISTS pan_items (
+  source_id  TEXT NOT NULL,
+  serial     TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  path       TEXT NOT NULL,
+  is_dir     INTEGER NOT NULL,
+  concept_id INTEGER,
+  seen_at    TEXT NOT NULL,
+  PRIMARY KEY (source_id, serial, name)
+);
+CREATE INDEX IF NOT EXISTS idx_pan_items_concept ON pan_items(source_id, concept_id);
+
 CREATE TABLE IF NOT EXISTS store_meta (
   concept_id   INTEGER PRIMARY KEY,
   found        INTEGER NOT NULL DEFAULT 0,
