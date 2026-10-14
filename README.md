@@ -88,7 +88,6 @@ server/            后端（Fastify + node:sqlite）
 web/               前端（Vite + React + TypeScript + Tailwind），构建产物在 web/dist
 ps5watch.mjs       命令行
 scripts/           开机自启脚本
-legacy/            重构前的脚本（仅供参考，不再使用）
 state/             数据库、cookie、浏览器配置、日志
 bduss.txt, bd_open.json   ★ 百度账号凭据，勿外传
 ```
