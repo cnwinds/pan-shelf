@@ -1,9 +1,9 @@
 // 扫码登录：在本机弹出独立浏览器窗口打开百度网盘，用户扫码后通过 CDP 读取 HttpOnly 的 BDUSS/STOKEN，
-// 写入 bduss.txt 并灌给 BaiduPCS-Go。BDUSS 是会话 cookie，浏览器必须优雅关闭，强杀会丢失。
+// 写入 bduss.txt 并校验网盘登录态。BDUSS 是会话 cookie，浏览器必须优雅关闭，强杀会丢失。
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { BROWSER_PROFILE, BDUSS_FILE } from './paths.mjs';
-import { ensureBpcsLogin } from './baidu.mjs';
+import { verifyLogin } from './baidu.mjs';
 import { sleep } from './util.mjs';
 import { bus } from './bus.mjs';
 
@@ -124,8 +124,8 @@ async function run(browser) {
       fs.writeFileSync(BDUSS_FILE, `BDUSS=${get('BDUSS')}\nSTOKEN=${get('STOKEN')}\n`);
       try { conn.ws.close(); } catch {}
       await closeBrowserGracefully();
-      const ok = await ensureBpcsLogin();
-      set(ok ? 'success' : 'failed', ok ? '登录成功，转存引擎已更新登录态' : '已拿到凭据，但转存引擎登录失败，请重试');
+      const ok = await verifyLogin();
+      set(ok ? 'success' : 'failed', ok ? '登录成功' : '已拿到凭据，但网盘登录态校验失败，请重试');
       bus.emit('account-changed');
       return;
     }

@@ -1,28 +1,25 @@
-// 百度盘操作：
-//   转存 / 改名 / 移动 / 删除 → BaiduPCS-Go（Go TLS 能过百度的指纹墙；curl/Node fetch 调网页接口会 -6）
-//   列表 / 配额 / 用户信息   → xpan 开放平台（bd_open.json，access_token 自动续期）
-// 开放平台应用只有「应用目录写权限」，所以所有写操作必须走 BaiduPCS-Go。
-import { execFile } from 'node:child_process';
+// 百度盘操作（纯 Node.js HTTP 实现，无外部二进制依赖）：
+//   转存                     → pan.baidu.com/share/{verify,list,transfer}（携带 BDUSS + STOKEN + Netdisk UA）
+//   改名 / 移动 / 删除 / 建目录 → pcs.baidu.com/rest/2.0/pcs/file?app_id=266719（携带 BDUSS）
+//   列表 / 配额 / 用户信息    → xpan 开放平台（bd_open.json，access_token 自动续期）
 import fs from 'node:fs';
-import { BPCS_EXE, BDUSS_FILE, OPEN_FILE } from './paths.mjs';
+import { BDUSS_FILE, OPEN_FILE } from './paths.mjs';
 import { Mutex, sleep } from './util.mjs';
 
-const bpcsLock = new Mutex();
+const PCS_APP_ID = '266719';
+const XPAN_APP_ID = '250528';
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+// 百度分享页对普通浏览器 UA 会弹登录重定向而隐藏 window.locals；使用网盘客户端 UA 可直接拿到 bdstoken / shareid / share_uk
+const NETDISK_UA = 'netdisk;P2SP;3.0.0.8;netdisk;11.12.3;ANG-AN00;android-android;10.0;JSbridge4.4.0;jointBridge;1.1.0;';
 
-function bpcsRaw(args, timeoutSec = 120, signal) {
-  return new Promise((resolve, reject) => {
-    execFile(BPCS_EXE, args, { windowsHide: true, timeout: timeoutSec * 1000, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8', signal },
-      (err, stdout, stderr) => {
-        if (err && !stdout) return reject(err.code === 'ABORT_ERR' ? signal.reason : new Error(`BaiduPCS-Go ${args[0]} 失败: ${String(stderr || err.message).slice(0, 200)}`));
-        resolve(stdout || '');
-      });
-  });
+const writeLock = new Mutex();
+
+function withTimeout(timeoutSec, signal) {
+  const t = AbortSignal.timeout(timeoutSec * 1000);
+  return signal ? AbortSignal.any([signal, t]) : t;
 }
 
-// BaiduPCS-Go 的工作目录是全局状态，cd + transfer 必须原子执行
-export const bpcs = (args, opts = {}) => bpcsLock.run(() => bpcsRaw(args, opts.timeoutSec, opts.signal));
-
-// ---------- 登录态 ----------
+// ---------- 登录态（BDUSS / STOKEN） ----------
 export function readBduss() {
   if (!fs.existsSync(BDUSS_FILE)) return null;
   const lines = fs.readFileSync(BDUSS_FILE, 'utf8').split(/\r?\n/).filter(l => l.includes('=') && !l.startsWith('#'));
@@ -31,20 +28,39 @@ export function readBduss() {
   return bduss ? { bduss, stoken } : null;
 }
 
-export async function ensureBpcsLogin() {
+function cookieHeader(extra = '') {
   const c = readBduss();
-  if (!c) return false;
-  const out = await bpcs(['login', '-bduss=' + c.bduss, '-stoken=' + (c.stoken || '')]);
-  return out.includes('登录成功');
+  if (!c?.bduss) throw new Error('缺少 bduss.txt（百度网盘登录态）');
+  return `BDUSS=${c.bduss}` + (c.stoken ? `; STOKEN=${c.stoken}` : '') + (extra ? `; ${extra}` : '');
 }
 
 export async function whoami() {
+  const c = readBduss();
+  if (!c?.bduss) return null;
   try {
-    // who 只读本地配置，不加锁，避免被长时间的转存阻塞
-    const out = await bpcsRaw(['who'], 30);
-    const m = out.match(/uid:\s*(\d+),\s*用户名:\s*([^,\r\n]+)/);
-    return m ? { uid: m[1], name: m[2].trim() } : null;
-  } catch { return null; }
+    const r = await fetch(
+      `https://pan.baidu.com/api/gettemplatevariable?clienttype=0&app_id=${XPAN_APP_ID}&web=1&fields=%5B%22bdstoken%22,%22username%22,%22uk%22%5D`,
+      {
+        signal: AbortSignal.timeout(15000),
+        headers: {
+          'user-agent': NETDISK_UA,
+          referer: 'https://pan.baidu.com/disk/home',
+          cookie: `BDUSS=${c.bduss}` + (c.stoken ? `; STOKEN=${c.stoken}` : ''),
+        },
+      },
+    );
+    const j = await r.json();
+    if (j.errno === 0 && j.result?.bdstoken) {
+      return { uid: String(j.result.uk || ''), name: String(j.result.username || '已登录').trim() };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function verifyLogin() {
+  return Boolean(await whoami());
 }
 
 // ---------- 开放平台 token ----------
@@ -126,8 +142,17 @@ export async function listDir(dir) {
 }
 
 // ---------- 分享内容（匿名，凭提取码） ----------
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
-const SHARE_ERR = { '-9': '提取码错误', '-62': '需要验证码（请求太频繁）', '105': '链接已失效', '-7': '链接已失效', '117': '链接已过期', '-12': '提取码错误' };
+const SHARE_ERR = {
+  '-9': '提取码错误',
+  '-12': '提取码错误',
+  '-62': '需要验证码（请求太频繁）',
+  '105': '链接已失效',
+  '-7': '链接已失效',
+  '117': '链接已过期',
+  '-21': '分享已取消或不存在',
+  '115': '该文件禁止分享',
+};
+const INVALID_ERRNO = [105, -7, 117, -21, 115];
 
 // 递归列出分享里的全部文件。返回 { files: [{ rel, name, size }] } 或 { error }
 export async function listShare(surl, pwd, { delayMs = 400 } = {}) {
@@ -146,7 +171,7 @@ export async function listShare(surl, pwd, { delayMs = 400 } = {}) {
       const dir = queue.shift();
       for (let page = 1; ; page++) {
         const q = dir === null ? 'root=1' : `root=0&dir=${encodeURIComponent(dir)}`;
-        const j = await (await fetch(`https://pan.baidu.com/share/list?web=1&app_id=250528&shorturl=${short}&${q}&page=${page}&num=100&order=name&desc=0&showempty=0`,
+        const j = await (await fetch(`https://pan.baidu.com/share/list?web=1&app_id=${XPAN_APP_ID}&shorturl=${short}&${q}&page=${page}&num=100&order=name&desc=0&showempty=0`,
           { headers, signal: AbortSignal.timeout(20000) })).json();
         if (j.errno !== 0) return { error: SHARE_ERR[j.errno] || `列目录失败 errno=${j.errno}` };
         for (const e of j.list || []) {
@@ -163,44 +188,178 @@ export async function listShare(surl, pwd, { delayMs = 400 } = {}) {
   }
 }
 
-// ---------- 写操作（BaiduPCS-Go） ----------
+// ---------- 写操作（PCS 接口 + 网页分享转存接口） ----------
+async function pcsFile(method, { query = {}, param = null, timeoutSec = 120, signal } = {}) {
+  const qs = new URLSearchParams({ app_id: PCS_APP_ID, method, ...query });
+  let body;
+  if (param !== null) {
+    body = new FormData();
+    body.append('param', JSON.stringify(param));
+  }
+  const r = await fetch(`https://pcs.baidu.com/rest/2.0/pcs/file?${qs}`, {
+    method: 'POST',
+    headers: { 'user-agent': NETDISK_UA, cookie: cookieHeader() },
+    body,
+    signal: withTimeout(timeoutSec, signal),
+  });
+  return r.json();
+}
+
 export async function mv(src, dst, signal) {
-  const out = await bpcs(['mv', src, dst], { timeoutSec: 180, signal });
-  return out.includes('成功');
+  return writeLock.run(async () => {
+    try {
+      const j = await pcsFile('move', { param: { list: [{ from: src, to: dst }] }, timeoutSec: 180, signal });
+      return !j.error_code;
+    } catch (e) {
+      if (signal?.aborted) throw signal.reason;
+      return false;
+    }
+  });
 }
 
 export async function rm(paths, signal) {
-  const out = await bpcs(['rm', ...paths], { timeoutSec: 180, signal });
-  return out.includes('操作成功') || out.includes('已删除');
+  return writeLock.run(async () => {
+    try {
+      const j = await pcsFile('delete', { param: { list: paths.map(path => ({ path })) }, timeoutSec: 180, signal });
+      // 31066 = 文件或目录不存在（幂等视为已删）
+      return !j.error_code || j.error_code === 31066;
+    } catch (e) {
+      if (signal?.aborted) throw signal.reason;
+      return false;
+    }
+  });
 }
 
 export async function mkdir(dir, signal) {
-  const out = await bpcs(['mkdir', dir], { timeoutSec: 60, signal });
-  return out.includes('成功') || out.includes('已存在');
+  return writeLock.run(async () => {
+    try {
+      const j = await pcsFile('mkdir', { query: { path: dir }, timeoutSec: 60, signal });
+      // 31061 = 目录已存在
+      return !j.error_code || j.error_code === 31061;
+    } catch (e) {
+      if (signal?.aborted) throw signal.reason;
+      return false;
+    }
+  });
 }
 
 // 转存一个分享到 destDir。返回 { status, detail }
-// status: saved | exists | invalid | err_quota | err_<code> | exc
+// status: saved | exists | invalid | err_quota | err_pwd | err_<code> | exc
 export async function transferOne(surl, pwd, destDir, { timeoutSec = 180, signal } = {}) {
-  return bpcsLock.run(async () => {
+  return writeLock.run(async () => {
+    const sig = withTimeout(timeoutSec, signal);
     try {
-      const cd = await bpcsRaw(['cd', destDir], 60, signal);
-      if (!cd.includes('改变工作目录') && !cd.includes(destDir)) {
-        await bpcsRaw(['mkdir', destDir], 60, signal);
-        const cd2 = await bpcsRaw(['cd', destDir], 60, signal);
-        if (!cd2.includes('改变工作目录') && !cd2.includes(destDir)) return { status: 'err_cd', detail: cd2.slice(0, 160).trim() };
+      const dirRes = await pcsFile('mkdir', { query: { path: destDir }, timeoutSec: 60, signal: sig });
+      if (dirRes.error_code && dirRes.error_code !== 31061) {
+        return { status: 'err_cd', detail: `目标目录不可用 (${dirRes.error_code}): ${dirRes.error_msg || destDir}`.slice(0, 160) };
       }
-      const out = await bpcsRaw(['transfer', 'https://pan.baidu.com/s/' + surl, pwd || ''], timeoutSec, signal);
-      const flat = out.replace(/\s+/g, ' ').trim();
-      if (out.includes('转存到网盘成功')) return { status: 'saved' };
-      if (out.includes('文件重复') || out.includes('已经存在')) return { status: 'exists' };
-      if (/空间不足|容量不足|超出.*容量|quota/i.test(out)) return { status: 'err_quota', detail: flat.slice(0, 160) };
-      if (out.includes('失效') || out.includes('不存在') || out.includes('已被删除') || out.includes('取消分享')) return { status: 'invalid', detail: flat.slice(0, 160) };
-      if (out.includes('提取码')) return { status: 'err_pwd', detail: flat.slice(0, 160) };
-      const m = out.match(/代码:\s*(-?\d+),\s*消息:\s*([^\r\n]*)/);
-      return { status: 'err_' + (m ? m[1] : 'unknown'), detail: flat.slice(0, 160) };
+
+      const short = String(surl).replace(/^1/, '');
+      const featureStr = '1' + short;
+
+      let randsk = '';
+      if (pwd) {
+        const vr = await fetch(`https://pan.baidu.com/share/verify?surl=${short}&t=${Date.now()}&channel=chunlei&web=1&clienttype=0`, {
+          method: 'POST',
+          signal: sig,
+          headers: {
+            'user-agent': UA,
+            referer: `https://pan.baidu.com/share/init?surl=${short}`,
+            'content-type': 'application/x-www-form-urlencoded',
+            cookie: cookieHeader(),
+          },
+          body: `pwd=${encodeURIComponent(pwd)}&vcode=&vcode_str=`,
+        });
+        const vj = await vr.json();
+        if (vj.errno === -9 || vj.errno === -12) return { status: 'err_pwd', detail: SHARE_ERR[vj.errno] || '提取码错误' };
+        if (INVALID_ERRNO.includes(vj.errno)) return { status: 'invalid', detail: SHARE_ERR[vj.errno] || `链接已失效 errno=${vj.errno}` };
+        if (vj.errno !== 0) return { status: 'err_' + vj.errno, detail: SHARE_ERR[vj.errno] || `验证提取码失败 errno=${vj.errno}` };
+        randsk = vj.randsk || '';
+      }
+
+      const cookie = cookieHeader(randsk ? `BDCLND=${randsk}` : '');
+      const pr = await fetch(`https://pan.baidu.com/s/${featureStr}`, {
+        signal: sig,
+        headers: {
+          'user-agent': NETDISK_UA,
+          referer: pwd ? `https://pan.baidu.com/share/init?surl=${short}` : 'https://pan.baidu.com/disk/home',
+          cookie,
+        },
+      });
+      const html = await pr.text();
+      if (pr.url.includes('/error') || html.includes('error-404') || html.includes('platform-non-found') || html.includes('share-error-left')) {
+        return { status: 'invalid', detail: '分享链接已失效或不存在' };
+      }
+      if (pr.url.includes('/share/init')) {
+        return { status: 'err_pwd', detail: '需要提取码或提取码错误' };
+      }
+      const m = html.match(/(\{"[^\r\n]+?"loginstate"[^\r\n]+?\})/);
+      if (!m) return { status: 'err_-6', detail: '未能从分享页获取登录态，请检查 BDUSS/STOKEN' };
+      const locals = JSON.parse(m[1]);
+      if (!locals.bdstoken || !locals.loginstate) return { status: 'err_-6', detail: '百度网盘登录态已失效（缺少 bdstoken）' };
+      if (!locals.shareid || !locals.share_uk) return { status: 'invalid', detail: '分享页缺少 shareid / share_uk' };
+
+      const listQs = new URLSearchParams({
+        app_id: XPAN_APP_ID,
+        bdstoken: String(locals.bdstoken),
+        channel: 'chunlei',
+        root: '1',
+        shorturl: short,
+        web: '5',
+      });
+      const lr = await fetch(`https://pan.baidu.com/share/list?${listQs}`, {
+        signal: sig,
+        headers: { 'user-agent': UA, referer: `https://pan.baidu.com/s/${featureStr}`, cookie },
+      });
+      const lj = await lr.json();
+      if (INVALID_ERRNO.includes(lj.errno)) return { status: 'invalid', detail: SHARE_ERR[lj.errno] || `链接已失效 errno=${lj.errno}` };
+      if (lj.errno !== 0) return { status: 'err_' + lj.errno, detail: `获取分享列表失败 errno=${lj.errno}` };
+      const fsids = (lj.list || []).map(x => x.fs_id);
+      if (!fsids.length) return { status: 'invalid', detail: '分享内容为空' };
+
+      const trQs = new URLSearchParams({
+        app_id: XPAN_APP_ID,
+        bdstoken: String(locals.bdstoken),
+        channel: 'chunlei',
+        clienttype: '0',
+        from: String(locals.share_uk),
+        shareid: String(locals.shareid),
+        web: '1',
+      });
+      const tr = await fetch(`https://pan.baidu.com/share/transfer?${trQs}`, {
+        method: 'POST',
+        signal: sig,
+        headers: {
+          'user-agent': UA,
+          referer: `https://pan.baidu.com/s/${featureStr}`,
+          'content-type': 'application/x-www-form-urlencoded',
+          cookie,
+        },
+        body: new URLSearchParams({ fsidlist: JSON.stringify(fsids), path: destDir }).toString(),
+      });
+      const tj = await tr.json();
+      if (tj.errno === 0) return { status: 'saved' };
+      if (tj.errno === 4 || tj.errno === -8 || tj.errno === -30) return { status: 'exists' };
+      const showMsg = String(tj.show_msg || tj.err_msg || '').trim();
+      if (tj.errno === -10 || tj.errno === -32 || /空间不足|容量不足|超出.*容量|quota/i.test(showMsg)) {
+        return { status: 'err_quota', detail: (showMsg || '网盘空间不足').slice(0, 160) };
+      }
+      if (INVALID_ERRNO.includes(tj.errno)) {
+        return { status: 'invalid', detail: (showMsg || SHARE_ERR[tj.errno] || `链接已失效 errno=${tj.errno}`).slice(0, 160) };
+      }
+      if (tj.errno === 12) {
+        if (tj.target_file_nums > tj.target_file_nums_limit) {
+          return { status: 'err_12', detail: `转存文件数(${tj.target_file_nums})超过单次上限(${tj.target_file_nums_limit})` };
+        }
+        const subErrs = (tj.info || []).map(x => x.errno).filter(e => e !== undefined && e !== 0);
+        if (subErrs.length > 0 && subErrs.every(e => e === -30 || e === -8)) return { status: 'exists' };
+        if (subErrs.includes(-10) || subErrs.includes(-32)) return { status: 'err_quota', detail: (showMsg || '网盘空间不足').slice(0, 160) };
+        const sub = subErrs[0] ?? 12;
+        return { status: 'err_' + sub, detail: (showMsg || `转存失败 errno=12 (sub=${sub})`).slice(0, 160) };
+      }
+      return { status: 'err_' + (tj.errno ?? 'unknown'), detail: (showMsg || JSON.stringify(tj)).slice(0, 160) };
     } catch (e) {
-      if (signal?.aborted) throw e;
+      if (signal?.aborted) throw signal.reason;
       return { status: 'exc', detail: String(e.message || e).slice(0, 160) };
     }
   });

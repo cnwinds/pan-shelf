@@ -10,7 +10,6 @@
 
 ```
 npm run setup        # 首次：安装依赖并构建网页（需要 Node.js ≥ 22.13）
-                     # 另需把 BaiduPCS-Go（https://github.com/qjfoidnh/BaiduPCS-Go/releases）的 exe 放到 bin/BaiduPCS-Go.exe
 npm start            # 启动控制台 → http://127.0.0.1:5175
 ```
 
@@ -81,7 +80,7 @@ server/            后端（Fastify + node:sqlite）
   scheduler.mjs    每日定时流水线 + 封禁探测
   site.mjs         站点抓取（curl + cookie jar，按域名串行限速）
   sources.mjs      来源管理与站点适配器（wp2468c / generic）
-  baidu.mjs        百度盘：BaiduPCS-Go（写）+ xpan 开放平台（读）
+  baidu.mjs        百度盘：纯 Node.js 实现（PCS/分享转存写 + xpan 开放平台读）
   login.mjs        扫码登录（弹浏览器 + CDP 取 BDUSS/STOKEN）
   notify.mjs       站内消息 / Windows 通知 / Webhook
   settings.mjs     参数默认值与校验
@@ -91,7 +90,6 @@ ps5watch.mjs       命令行
 scripts/           开机自启脚本
 legacy/            重构前的脚本（仅供参考，不再使用）
 state/             数据库、cookie、浏览器配置、日志
-bin/BaiduPCS-Go.exe
 bduss.txt, bd_open.json   ★ 百度账号凭据，勿外传
 ```
 

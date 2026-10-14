@@ -8,10 +8,5 @@ state/
 # 依赖与构建产物
 node_modules/
 web/dist/
-
-# 第三方可执行文件（BaiduPCS-Go 自行下载放到 bin/）
-bin/*.exe
-bin/BaiduPCS-Go*
-
 *.log
 *.tmp.mjs

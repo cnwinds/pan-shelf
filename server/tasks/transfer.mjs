@@ -11,8 +11,6 @@ const GB = 1024 ** 3;
 
 export async function requireLogin(ctx) {
   if (await bd.whoami()) return;
-  ctx.log('warn', '转存引擎未登录，尝试用 bduss.txt 恢复登录态');
-  if (await bd.ensureBpcsLogin() && await bd.whoami()) return;
   notify('login_expired', 'error', '百度网盘登录已失效', '请在盘架的「设置 → 账号」里重新扫码登录');
   throw new Error('百度网盘登录已失效，请在「设置 → 账号」重新扫码登录');
 }

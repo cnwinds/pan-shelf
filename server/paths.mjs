@@ -7,7 +7,6 @@ export const STATE_DIR = path.join(ROOT, 'state');
 export const DB_FILE = path.join(STATE_DIR, 'ps5watch.db');
 export const SITE_COOKIE_JAR = path.join(STATE_DIR, 'site_cookies.txt');
 export const BROWSER_PROFILE = path.join(STATE_DIR, 'browser-profile');
-export const BPCS_EXE = path.join(ROOT, 'bin', 'BaiduPCS-Go.exe');
 export const BDUSS_FILE = path.join(ROOT, 'bduss.txt');
 export const OPEN_FILE = path.join(ROOT, 'bd_open.json');
 export const LEGACY_CONFIG = path.join(ROOT, 'config.json');

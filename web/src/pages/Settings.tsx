@@ -392,7 +392,7 @@ function Account() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="font-display text-[17px] font-semibold">网盘登录（转存用）</h2>
-            <p className="mt-1 max-w-[72ch] text-[13px] text-muted">转存、改名、移动、删除都通过 BaiduPCS-Go 完成，它需要你的网盘登录态。登录态一般能保持几个月，失效时会通知你。</p>
+            <p className="mt-1 max-w-[72ch] text-[13px] text-muted">转存、改名、移动、删除直接调用百度网盘接口（基于 bduss.txt 的 BDUSS/STOKEN 登录态）。登录态一般能保持几个月，失效时会通知你。</p>
           </div>
           <button className="btn btn-sm" onClick={() => { setFresh(true); refetch(); }} disabled={isFetching}><RefreshCw size={12} className={cx(isFetching && 'animate-spin')} />重新检查</button>
         </div>

@@ -85,6 +85,11 @@ schtasks /Run /TN "PS5Watch" # 手动触发计划任务
 
 ## 6. 架构决策与踩坑记录（重要，勿重蹈覆辙）
 
+> **2026-10-14 更新：已移除 BaiduPCS-Go。** 写操作改由 `server/baidu.mjs` 直接调用百度接口：
+> 建目录/移动/删除走 `pcs.baidu.com/rest/2.0/pcs/file?app_id=266719`（带 BDUSS），
+> 转存走 `/share/verify → /s/<surl>（网盘客户端 UA 取 bdstoken/shareid/share_uk）→ /share/list → /share/transfer`。
+> 下面「为什么用 BaiduPCS-Go」的结论已过时：当年的 -6 是缺 STOKEN、缺 bdstoken 或用了浏览器 UA 访问分享页导致的，不是 TLS 指纹问题。
+
 ### 为什么转存用 BaiduPCS-Go 而不是 curl/浏览器
 - **curl / Node fetch 直调 `pan.baidu.com/api/*` 一律返回 errno -6**（TLS/HTTP2 指纹墙，
   新旧 BDUSS 都一样，完整浏览器头也没用）。BaiduPCS-Go（Go TLS）能过
