@@ -15,7 +15,7 @@ const AUTO_SKIP = '自动跳过：';
 defineJob('crawl', {
   lane: 'site',
   label: '采集',
-  // params: { pages?: number, backlog?: boolean = true, list?: boolean = true, post_ids?: string[] }
+  // params: { pages?: number, full?: boolean, backlog?: boolean = true, list?: boolean = true, post_ids?: string[] }
   async run(ctx) {
     const src = getSource(ctx.job.source_id);
     if (!src) throw new Error('来源不存在');
@@ -36,17 +36,28 @@ defineJob('crawl', {
     };
 
     // ---- 阶段 1：翻列表页发现新帖 ----
+    // 全量同步（来源首次采集，或手动勾选）：从上次中断的页继续翻到末页，进度逐页保存；完成后日常采集只翻最新几页
     const fresh = [];
     if (p.list !== false && !p.post_ids) {
-      const maxPages = Math.min(p.pages || cfg.list_pages_default, cfg.list_pages_max);
+      const sync = p.full ? {} : loadListSync(src.id);
+      const full = p.full === true || (!sync.done && !p.pages);
+      let maxPages = full ? cfg.list_pages_max : Math.min(p.pages || cfg.list_pages_default, cfg.list_pages_max);
+      // 中断期间站点可能发了新帖把旧帖往后挤，续翻时回退一页
+      const resumeFrom = full ? Math.max(2, (sync.next || 2) - 1) : 2;
+      if (full) ctx.log(resumeFrom > 2 ? `全量同步：从第 ${resumeFrom} 页继续翻到末页` : '全量同步：翻完所有列表页');
       let emptyStreak = 0;
-      for (let page = 1; page <= maxPages; page++) {
+      let reachedEnd = false;
+      for (let page = 1; page <= maxPages; page = page === 1 ? resumeFrom : page + 1) {
         await ctx.checkpoint();
         const url = adapter.listUrl(src, page);
         ctx.progress({ phase: 'list', page, pages: maxPages, done: 0, total: 0, current: `列表第 ${page} 页`, counters });
         const html = await fetchOrBlock(url);
         if (!html) { ctx.log('warn', `列表第 ${page} 页抓取失败，跳过列表扫描`); break; }
         counters.list_pages++;
+        if (page === 1 && full && adapter.lastPage) {
+          maxPages = adapter.lastPage(html, src);
+          ctx.log(`列表共 ${maxPages} 页`);
+        }
         const posts = adapter.extractPosts(html, src);
         let n = 0;
         for (const [id, purl] of posts) {
@@ -56,9 +67,18 @@ defineJob('crawl', {
         }
         counters.new_posts += n;
         ctx.log(`列表第 ${page} 页：${posts.size} 帖，新帖 ${n}`);
-        if (posts.size === 0) { ctx.log('warn', '列表页没有解析到帖子，可能是页面结构变化或已到末页'); break; }
+        if (posts.size === 0) { ctx.log('warn', '列表页没有解析到帖子，可能是页面结构变化或已到末页'); reachedEnd = page > 1; break; }
+        if (full) {
+          if (page > 1) saveListSync(src.id, { done: false, next: page + 1 });
+          if (page >= maxPages) reachedEnd = true;
+          continue;
+        }
         if (page > 1 && n === 0 && ++emptyStreak >= cfg.stop_after_empty_pages) break;
         if (n > 0) emptyStreak = 0;
+      }
+      if (full && reachedEnd) {
+        saveListSync(src.id, { done: true, next: 1, at: nowIso() });
+        ctx.log('全量同步完成，之后的日常采集只翻最新几页');
       }
     }
 
@@ -134,6 +154,15 @@ defineJob('crawl', {
     else notify('error', 'error', '采集任务失败', `${sourceName(job)}：${e.message}`);
   },
 });
+
+const LIST_SYNC_KEY = '_list_sync';
+const loadListSyncAll = () => JSON.parse(one('SELECT value FROM settings WHERE key = ?', LIST_SYNC_KEY)?.value || '{}');
+const loadListSync = (sid) => loadListSyncAll()[sid] || {};
+function saveListSync(sid, state) {
+  const all = loadListSyncAll();
+  all[sid] = state;
+  exec('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', LIST_SYNC_KEY, JSON.stringify(all));
+}
 
 const pendingCount = (sid) => one(`SELECT COUNT(*) n FROM posts WHERE source_id = ? AND status = 'pending_detail'`, sid).n;
 const sourceName = (job) => getSource(job.source_id)?.name || job.source_id;

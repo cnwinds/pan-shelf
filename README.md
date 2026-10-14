@@ -47,7 +47,7 @@ docker compose up -d --build   # → http://127.0.0.1:5175
 
 - **站点请求永远串行**：同一域名全局只有一个在途请求，间隔和随机抖动可在设置里调（默认 5.5 秒 + 0~1.5 秒）。
   连续失败达到阈值判定为封禁，采集自动停止，之后按间隔探测，恢复后自动重新采集。
-- **全量同步、按需入盘**：采集会同步站点上全部游戏（定时任务每天翻最新几页发现新帖，并补抓所有缺口），
+- **全量同步、按需入盘**：采集会同步站点上全部游戏（来源首次采集翻完所有列表页，中断后从断点续翻；之后定时任务每天翻最新几页发现新帖，并补抓所有缺口），
   默认**不转存**，链接标为「可入盘」；在游戏库搜索游戏名或游戏编号，点「加入网盘」才转存。
   想恢复「采到就存」，在「设置 → 转存策略」打开自动转存。
 - **从网盘删除游戏**：游戏库勾选游戏 →「从网盘删除」，先按游戏编号列出网盘里对应的文件夹和大小，确认后删除；
@@ -72,7 +72,7 @@ docker compose up -d --build   # → http://127.0.0.1:5175
 ```
 node ps5watch.mjs check                 # 账号 / 空间 / 统计
 node ps5watch.mjs run                   # 一轮：采集 → 转存 → 规整预览
-node ps5watch.mjs crawl [--pages N] [--no-backlog]
+node ps5watch.mjs crawl [--pages N] [--full] [--no-backlog]   # --full 从头翻完所有列表页
 node ps5watch.mjs transfer
 node ps5watch.mjs normalize [--apply]   # 生成规整预览；--apply 直接执行全部
 node ps5watch.mjs du [目录] [--force]    # 网盘用量扫描

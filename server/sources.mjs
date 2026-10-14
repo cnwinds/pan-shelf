@@ -57,6 +57,13 @@ export const ADAPTERS = {
       while ((m = re.exec(html))) if (m[0].startsWith(origin)) out.set(m[1], m[0]);
       return out;
     },
+    // 列表总页数（从分页导航里取最大页码）；超出末页站点返回 404，会被当成请求失败，所以全量翻页必须先知道末页
+    lastPage(html, s) {
+      const re = new RegExp(escapeRe(s.category_path) + '/page/(\\d+)', 'g');
+      let max = 1, m;
+      while ((m = re.exec(html))) max = Math.max(max, Number(m[1]));
+      return max;
+    },
     extractDetail: (html, s) => ({
       title: pageTitle(html, s.options.title_suffix ? escapeRe(s.options.title_suffix) : ''),
       links: extractBaiduLinks(html),

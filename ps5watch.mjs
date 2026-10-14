@@ -4,7 +4,7 @@
 //   node ps5watch.mjs serve                  启动 Web 控制台（默认 http://127.0.0.1:5175）
 //   node ps5watch.mjs check                  账号 / 配额 / 统计
 //   node ps5watch.mjs run                    一轮流水线：采集 → 转存 → 规整预览（计划任务入口）
-//   node ps5watch.mjs crawl [--pages N] [--no-backlog] [--source ID]
+//   node ps5watch.mjs crawl [--pages N] [--full] [--no-backlog] [--source ID]
 //   node ps5watch.mjs transfer [--source ID]
 //   node ps5watch.mjs normalize [--apply]    生成规整预览；--apply 直接执行预览里的全部目标
 //   node ps5watch.mjs du [路径] [--force]     网盘用量扫描
@@ -48,7 +48,7 @@ async function serverBase() {
 function jobRequests(sourceId) {
   switch (cmd) {
     case 'run': return [{ pipeline: true }];
-    case 'crawl': return [{ type: 'crawl', source_id: sourceId, params: { ...(opt('pages') ? { pages: Number(opt('pages')) } : {}), ...(flag('no-backlog') ? { backlog: false } : {}) } }];
+    case 'crawl': return [{ type: 'crawl', source_id: sourceId, params: { ...(opt('pages') ? { pages: Number(opt('pages')) } : {}), ...(flag('full') ? { full: true } : {}), ...(flag('no-backlog') ? { backlog: false } : {}) } }];
     case 'transfer': return [{ type: 'transfer', source_id: sourceId }];
     case 'normalize': return [{ type: 'normalize_plan', source_id: sourceId, apply: flag('apply') }];
     case 'prune': return [{ type: 'prune', source_id: sourceId, params: { dry: flag('dry') } }];

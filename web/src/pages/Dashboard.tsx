@@ -203,6 +203,7 @@ function CrawlDialog({ open, onClose, source, pending }: { open: boolean; onClos
   const start = useStartJob();
   const [pages, setPages] = useState<number | ''>('');
   const [backlog, setBacklog] = useState(true);
+  const [full, setFull] = useState(false);
   const def = data?.settings.crawl;
   const interval = def ? def.detail_interval_sec + def.jitter_sec / 2 : 6;
   const estimate = useMemo(() => {
@@ -211,21 +212,25 @@ function CrawlDialog({ open, onClose, source, pending }: { open: boolean; onClos
   }, [backlog, pending, pages, def, interval]);
 
   const submit = () => start.mutate(
-    { type: 'crawl', source_id: source.id, params: { ...(pages ? { pages: Number(pages) } : {}), backlog } },
+    { type: 'crawl', source_id: source.id, params: { ...(full ? { full: true } : pages ? { pages: Number(pages) } : {}), backlog } },
     { onSuccess: onClose },
   );
   return (
     <Modal open={open} onClose={onClose} title="开始采集"
       footer={<><button className="btn" onClick={onClose}>取消</button><button className="btn btn-primary" onClick={submit} disabled={start.isPending}>开始采集</button></>}>
       <div className="space-y-4">
-        <Field label="最多翻几页列表" hint={`留空使用默认值 ${def?.list_pages_default ?? 3} 页；连续出现没有新游戏的页面会提前停止。`} unit="页">
-          <input className="field w-28" type="number" min={1} max={def?.list_pages_max} value={pages} placeholder={String(def?.list_pages_default ?? 3)}
-            onChange={e => setPages(e.target.value ? Number(e.target.value) : '')} />
-        </Field>
+        <Toggle checked={full} onChange={setFull} label="全量同步：从头翻完所有列表页"
+          hint="首次采集会自动全量同步并记住进度，中断后下次接着翻；完成后日常采集只翻最新几页。想重新核对整站时再勾选。" />
+        {!full && (
+          <Field label="最多翻几页列表" hint={`留空使用默认值 ${def?.list_pages_default ?? 3} 页；连续出现没有新游戏的页面会提前停止。`} unit="页">
+            <input className="field w-28" type="number" min={1} max={def?.list_pages_max} value={pages} placeholder={String(def?.list_pages_default ?? 3)}
+              onChange={e => setPages(e.target.value ? Number(e.target.value) : '')} />
+          </Field>
+        )}
         <Toggle checked={backlog} onChange={setBacklog} label={`同时补抓历史缺口（${pending} 个游戏还没抓详情）`}
           hint="关闭后只处理本次列表里新出现的游戏。" />
         <div className="rounded-lg bg-paper px-3 py-2 text-[13px] text-ink-2">
-          每次请求间隔约 {interval.toFixed(1)} 秒，预计耗时 {estimate < 1 ? '不到 1 分钟' : `${estimate} 分钟`}。采集中途可以随时暂停或取消。
+          每次请求间隔约 {interval.toFixed(1)} 秒，{full ? '全量同步每页列表和每个新游戏各请求一次，整站可能要一两个小时' : `预计耗时 ${estimate < 1 ? '不到 1 分钟' : `${estimate} 分钟`}`}。采集中途可以随时暂停或取消。
         </div>
         <ErrorNote error={start.error} />
       </div>
