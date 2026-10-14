@@ -17,6 +17,8 @@ import {
   Radar,
   SkipForward,
   Undo2,
+  ArrowUpDown,
+  ChevronDown,
 } from 'lucide-react';
 import { api, type Game, type Job, type PanState, type RemovalPreview } from '../lib/api';
 import { useAccount, useSetup, useSources } from '../lib/hooks';
@@ -183,9 +185,7 @@ export function Games() {
   const rows = games.data?.rows || [];
   const total = games.data?.total || 0;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const inPanCount = facets.data?.transferred ?? 0;
   const queuedCount = facets.data?.pending_transfer ?? 0;
-  const availableCount = facets.data?.available ?? 0;
   const failedCount = (facets.data?.transfer_failed || 0) + (facets.data?.detail_failed || 0);
 
   const toggleSelect = (postId: string) => {
@@ -204,35 +204,58 @@ export function Games() {
   return (
     <>
       <header className="library-head">
-        <div>
+        <div className="min-w-0">
           <h1>
             游戏库 <span className="count">{total}</span>
           </h1>
           <p className="lede">
             <span className="lede-legend">
               <i className="legend-dot bright" />
-              亮色：已加入网盘（<strong className="num text-[#e8edf5]">{inPanCount}</strong>）
-            </span>
-            <span>·</span>
-            <span className="lede-legend">
-              <i className="legend-dot dim" />
-              暗色：未加入网盘（<strong className="num text-[#e8edf5]">{availableCount}</strong>）
+              亮色封面表示已在网盘
             </span>
             {acc?.quota?.free != null && (
               <>
-                <span>·</span>
+                <span className="lede-sep" />
                 <span>
-                  网盘剩余 <strong className="num text-[#e8edf5]">{bytes(acc.quota.free)}</strong>
+                  网盘剩余 <strong className="num text-ink">{bytes(acc.quota.free)}</strong>
                 </span>
               </>
             )}
           </p>
         </div>
 
-        <div className="library-controls">
+        <div className="library-actions">
+          {failedCount > 0 && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => action.mutate({ action: 'retry_failed' })}
+              disabled={action.isPending}
+              title="重试所有抓取失败或转存失败的游戏"
+            >
+              <RotateCcw size={13} />
+              重试失败 <span className="num opacity-70">{failedCount}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            className={cx('btn btn-sm', batchMode && 'btn-primary')}
+            onClick={() => {
+              setBatchMode(v => !v);
+              setSelected(new Set());
+            }}
+          >
+            <CheckSquare size={14} />
+            {batchMode ? '退出批量' : '批量管理'}
+          </button>
+        </div>
+      </header>
+
+      <div className="library-toolbar">
+        <div className="toolbar-group">
           {sources && sources.length > 1 && (
             <select
-              className="field w-auto! h-[34px]!"
+              className="toolbar-select"
               value={sourceId}
               onChange={e => updateParams({ source: e.target.value })}
               aria-label="选择来源"
@@ -264,84 +287,66 @@ export function Games() {
                 </button>
               );
             })}
+            <label className={cx('filters-more', isExtraView && 'on')}>
+              <select
+                value={isExtraView ? view : ''}
+                onChange={e => updateParams({ view: e.target.value || null })}
+                aria-label="更多状态筛选"
+              >
+                <option value="">更多状态</option>
+                {EXTRA_FILTERS.map(f => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}（{facets.data?.[f.id] ?? 0}）
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={13} aria-hidden="true" />
+            </label>
           </div>
+        </div>
 
-          <select
-            className="field w-auto! h-[34px]! text-xs!"
-            value={isExtraView ? view : ''}
-            onChange={e => updateParams({ view: e.target.value || null })}
-            aria-label="更多状态筛选"
-          >
-            <option value="">更多状态…</option>
-            {EXTRA_FILTERS.map(f => {
-              const c = facets.data?.[f.id] ?? 0;
-              return (
-                <option key={f.id} value={f.id}>
-                  {f.label} ({c})
-                </option>
-              );
-            })}
-          </select>
-
-          <select
-            className="field w-auto! h-[34px]! text-xs!"
-            value={sort}
-            onChange={e => updateParams({ sort: e.target.value === 'pan_first' ? null : e.target.value })}
-            aria-label="排序方式"
-          >
-            <option value="pan_first">已入盘优先</option>
-            <option value="newest">最新收录</option>
-            <option value="updated">最近更新</option>
-            <option value="title">按名称排序</option>
-            <option value="rating">评分最高</option>
-            <option value="release">发售日期（新→旧）</option>
-          </select>
-
+        <div className="toolbar-group">
           <button
             type="button"
-            className={cx('btn btn-sm h-[34px]! px-3!', cnOnly && 'btn-primary')}
+            className={cx('chip-toggle', cnOnly && 'on')}
             onClick={() => updateParams({ cn: cnOnly ? null : '1' })}
             title="只看 PS Store 标注有中文字幕或中文语音的游戏"
             aria-pressed={cnOnly}
           >
+            {cnOnly && <Check size={12} strokeWidth={3} />}
             有中文
           </button>
           <button
             type="button"
-            className={cx('btn btn-sm h-[34px]! px-3!', multiOnly && 'btn-primary')}
+            className={cx('chip-toggle', multiOnly && 'on')}
             onClick={() => updateParams({ multi: multiOnly ? null : '1' })}
             title="只看支持 2 人及以上同屏游玩的游戏"
             aria-pressed={multiOnly}
           >
+            {multiOnly && <Check size={12} strokeWidth={3} />}
             多人同屏
           </button>
 
-          <button
-            type="button"
-            className={cx('btn btn-sm h-[34px]! px-3!', batchMode && 'btn-primary')}
-            onClick={() => {
-              setBatchMode(v => !v);
-              setSelected(new Set());
-            }}
-          >
-            <CheckSquare size={14} />
-            {batchMode ? '退出批量' : '批量管理'}
-          </button>
+          <span className="toolbar-divider" aria-hidden="true" />
 
-          {failedCount > 0 && (
-            <button
-              type="button"
-              className="btn btn-sm h-[34px]!"
-              onClick={() => action.mutate({ action: 'retry_failed' })}
-              disabled={action.isPending}
-              title="重试所有抓取失败或转存失败的游戏"
+          <label className="sort-select">
+            <ArrowUpDown size={13} aria-hidden="true" />
+            <select
+              value={sort}
+              onChange={e => updateParams({ sort: e.target.value === 'pan_first' ? null : e.target.value })}
+              aria-label="排序方式"
             >
-              <RotateCcw size={13} />
-              重试失败 ({failedCount})
-            </button>
-          )}
+              <option value="pan_first">已入盘优先</option>
+              <option value="newest">最新收录</option>
+              <option value="updated">最近更新</option>
+              <option value="rating">评分最高</option>
+              <option value="release">发售日期（新→旧）</option>
+              <option value="title">按名称</option>
+            </select>
+            <ChevronDown size={13} aria-hidden="true" />
+          </label>
         </div>
-      </header>
+      </div>
 
       {notice && (
         <div className="mb-4 flex items-center justify-between rounded-lg border border-[#5fd3a0]/30 bg-[#5fd3a0]/10 px-4 py-2.5 text-[13px] text-[#5fd3a0]">
