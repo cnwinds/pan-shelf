@@ -110,6 +110,40 @@ function matchPanSize(post, enrichedSerial, inv) {
   return null;
 }
 
+const panListCache = new Map(); // dir -> { at, entries }
+async function listPanDirCached(dir) {
+  const c = panListCache.get(dir);
+  if (c && Date.now() - c.at < 60_000) return c.entries;
+  const entries = await bd.listDir(dir);
+  panListCache.set(dir, { at: Date.now(), entries });
+  return entries;
+}
+
+// 游戏在网盘里的实际位置：转存目录的顶层项里，名称含游戏编号（规整后就是编号目录）或等于转存时分享里的名字
+async function findPanPaths(src, row, serial, links) {
+  const savedNames = new Set(links.flatMap(l => { try { return JSON.parse(l.saved_names || '[]'); } catch { return []; } }));
+  const serials = new Set([serial, row.serial, ...String(row.share_serials || '').split(',')].map(s => String(s || '').trim().toUpperCase()).filter(Boolean));
+  const join = (name) => `${src.dest_dir.replace(/\/+$/, '')}/${name}`;
+  let entries = null;
+  try { entries = await listPanDirCached(src.dest_dir); } catch {}
+  const found = (entries || [])
+    .filter(e => savedNames.has(e.name) || [...serialsFromName(e.name)].some(s => serials.has(String(s).toUpperCase())))
+    .map(e => e.path || join(e.name));
+  return found.length ? found : [...savedNames].map(join);
+}
+
+const DETAIL_LINK_SQL = 'SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format, saved_names FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid';
+
+async function gameDetail(source_id, row, enriched) {
+  const links = all(DETAIL_LINK_SQL, source_id, String(row.post_id));
+  const inv = buildPanInventory(source_id);
+  const pan_size = matchPanSize(row, enriched.serial, inv);
+  const pan_state = computePanState(row, links, pan_size !== null);
+  const src = getSource(source_id);
+  const pan_paths = pan_state === 'in_pan' && src?.dest_dir ? await findPanPaths(src, row, enriched.serial, links) : [];
+  return { ...enriched, pan_state, pan_size, pan_paths, links };
+}
+
 function computePanState(post, links, hasPanDir = false) {
   if (hasPanDir || links.some(l => l.status === 'saved' || l.status === 'exists')) return 'in_pan';
   if (links.some(l => l.status === 'pending')) return 'queued';
@@ -320,10 +354,7 @@ export default async function routes(app) {
       await Promise.race([fetching, new Promise(r => setTimeout(r, 6000))]);
       enriched = enrichGameRow(row);
     }
-    const links = all('SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid', source_id, String(post_id));
-    const inv = buildPanInventory(source_id);
-    const pan_size = matchPanSize(row, enriched.serial, inv);
-    return { game: { ...enriched, pan_state: computePanState(row, links, pan_size !== null), pan_size, links } };
+    return { game: await gameDetail(source_id, row, enriched) };
   });
   app.get('/api/games/facets', async (req) => facets(req.query.source_id));
   app.post('/api/games/actions', async (req) => gameAction(req.body));
@@ -335,11 +366,7 @@ export default async function routes(app) {
     exec('UPDATE posts SET custom_name = ? WHERE source_id = ? AND post_id = ?', clean || null, source_id, String(post_id));
     const row = one('SELECT * FROM posts WHERE source_id = ? AND post_id = ?', source_id, String(post_id));
     if (!row) throw bad(404, '游戏不存在');
-    const enriched = enrichGameRow(row);
-    const links = all('SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid', source_id, String(post_id));
-    const inv = buildPanInventory(source_id);
-    const pan_size = matchPanSize(row, enriched.serial, inv);
-    return { ok: true, game: { ...enriched, pan_state: computePanState(row, links, pan_size !== null), pan_size, links } };
+    return { ok: true, game: await gameDetail(source_id, row, enrichGameRow(row)) };
   });
   app.post('/api/games/meta-refresh', async (req) => {
     const { source_id, post_id, concept_id } = req.body || {};
@@ -351,13 +378,7 @@ export default async function routes(app) {
     }
     if (!cid || cid <= 0) throw bad(400, '该游戏没有关联 PlayStation Store Concept ID');
     await refreshStoreMeta(cid);
-    if (row) {
-      const enriched = enrichGameRow(row);
-      const links = all('SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid', source_id, String(post_id));
-      const inv = buildPanInventory(source_id);
-      const pan_size = matchPanSize(row, enriched.serial, inv);
-      return { ok: true, game: { ...enriched, pan_state: computePanState(row, links, pan_size !== null), pan_size, links } };
-    }
+    if (row) return { ok: true, game: await gameDetail(source_id, row, enrichGameRow(row)) };
     return { ok: true, concept_id: cid };
   });
   app.get('/api/cover/:conceptId', async (req, reply) => {

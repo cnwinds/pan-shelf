@@ -136,6 +136,8 @@ export const exec = (sql, ...args) => db.prepare(sql).run(...args);
 const linkCols = new Set(all('PRAGMA table_info(links)').map(c => c.name));
 if (!linkCols.has('remark')) db.exec('ALTER TABLE links ADD COLUMN remark TEXT');
 if (!linkCols.has('format')) db.exec('ALTER TABLE links ADD COLUMN format TEXT');
+// 转存时分享里的顶层文件/目录名（JSON 数组），规整改名前用它在网盘里定位
+if (!linkCols.has('saved_names')) db.exec('ALTER TABLE links ADD COLUMN saved_names TEXT');
 const postCols = new Set(all('PRAGMA table_info(posts)').map(c => c.name));
 if (!postCols.has('serial')) db.exec('ALTER TABLE posts ADD COLUMN serial TEXT');
 // 分享里文件名上的编号（站点写的编号有时和实际内容不同），逗号分隔，删除游戏时按需查询并缓存

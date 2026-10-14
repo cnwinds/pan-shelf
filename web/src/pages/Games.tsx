@@ -730,6 +730,7 @@ function GameDrawer({
         : '';
 
   const savedLink = game.links.find(l => l.status === 'saved' || l.status === 'exists');
+  const panPath = game.pan_paths?.length ? game.pan_paths.join('、') : savedLink?.dest_dir || '';
   const preferredLink =
     savedLink ||
     game.links.find(l => l.status === 'available' || l.status === 'pending') ||
@@ -815,8 +816,8 @@ function GameDrawer({
                     <span className="size-2 rounded-full bg-[#5fd3a0]" />
                     已加入百度网盘
                   </div>
-                  <div className="mt-1 truncate text-xs text-muted">
-                    {savedLink?.dest_dir ? `路径：${savedLink.dest_dir}` : '已在目标网盘目录中'}
+                  <div className="mt-1 break-all text-xs text-muted">
+                    {panPath ? `路径：${panPath}` : '已在目标网盘目录中'}
                     {game.pan_size ? ` · 占用 ${bytes(game.pan_size)}` : ''}
                   </div>
                 </div>
@@ -1001,11 +1002,12 @@ function GameDrawer({
                       )}
 
                       <div className="flex items-center justify-between gap-2 pt-0.5 text-[11px] text-muted">
-                        <span className="truncate">
-                          {l.transferred_at
-                            ? `转存于 ${dateTime(l.transferred_at)} → ${l.dest_dir}`
-                            : l.last_error || ''}
-                        </span>
+                        {(() => {
+                          const text = l.transferred_at
+                            ? `转存于 ${dateTime(l.transferred_at)} → ${(l.status === 'saved' || l.status === 'exists') && panPath ? panPath : l.dest_dir}`
+                            : l.last_error || '';
+                          return <span className="min-w-0 break-all">{text}</span>;
+                        })()}
                         <div className="flex shrink-0 items-center gap-1.5">
                           {l.status !== 'saved' && l.status !== 'exists' && (
                             <button

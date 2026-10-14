@@ -309,6 +309,7 @@ export async function transferOne(surl, pwd, destDir, { timeoutSec = 180, signal
       if (lj.errno !== 0) return { status: 'err_' + lj.errno, detail: `获取分享列表失败 errno=${lj.errno}` };
       const fsids = (lj.list || []).map(x => x.fs_id);
       if (!fsids.length) return { status: 'invalid', detail: '分享内容为空' };
+      const names = (lj.list || []).map(x => x.server_filename).filter(Boolean);
 
       const trQs = new URLSearchParams({
         app_id: XPAN_APP_ID,
@@ -331,8 +332,14 @@ export async function transferOne(surl, pwd, destDir, { timeoutSec = 180, signal
         body: new URLSearchParams({ fsidlist: JSON.stringify(fsids), path: destDir }).toString(),
       });
       const tj = await tr.json();
-      if (tj.errno === 0) return { status: 'saved' };
-      if (tj.errno === 4 || tj.errno === -8 || tj.errno === -30) return { status: 'exists' };
+      if (tj.errno === 0) return { status: 'saved', names };
+      // 百度偶尔返回「已存在」类错误码但目标目录里并没有同名项，必须核实，否则游戏会被误标为已入盘
+      const verifyExists = async (errno) => {
+        const entries = await listDir(destDir).catch(() => null);
+        if (!entries || entries.some(e => names.includes(e.name))) return { status: 'exists', names };
+        return { status: 'err_' + errno, detail: `百度返回「已存在」(errno=${errno})，但 ${destDir} 里没有「${names[0]}」，请重试转存` };
+      };
+      if (tj.errno === 4 || tj.errno === -8 || tj.errno === -30) return verifyExists(tj.errno);
       const showMsg = String(tj.show_msg || tj.err_msg || '').trim();
       if (tj.errno === -10 || tj.errno === -32 || /空间不足|容量不足|超出.*容量|quota/i.test(showMsg)) {
         return { status: 'err_quota', detail: (showMsg || '网盘空间不足').slice(0, 160) };
@@ -345,7 +352,7 @@ export async function transferOne(surl, pwd, destDir, { timeoutSec = 180, signal
           return { status: 'err_12', detail: `转存文件数(${tj.target_file_nums})超过单次上限(${tj.target_file_nums_limit})` };
         }
         const subErrs = (tj.info || []).map(x => x.errno).filter(e => e !== undefined && e !== 0);
-        if (subErrs.length > 0 && subErrs.every(e => e === -30 || e === -8)) return { status: 'exists' };
+        if (subErrs.length > 0 && subErrs.every(e => e === -30 || e === -8)) return verifyExists(subErrs[0]);
         if (subErrs.includes(-10) || subErrs.includes(-32)) return { status: 'err_quota', detail: (showMsg || '网盘空间不足').slice(0, 160) };
         const sub = subErrs[0] ?? 12;
         return { status: 'err_' + sub, detail: (showMsg || `转存失败 errno=12 (sub=${sub})`).slice(0, 160) };

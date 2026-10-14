@@ -119,6 +119,7 @@ export interface Game {
   meta_state?: 'ready' | 'pending' | 'missing';
   pan_state?: PanState;
   pan_size?: number | null;
+  pan_paths?: string[];
 }
 
 export interface Settings {

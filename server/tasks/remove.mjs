@@ -77,7 +77,7 @@ export function resetLinks(sourceId, postId) {
   tx(() => {
     for (const l of picked) {
       if (!['saved', 'exists', 'pending'].includes(l.status) && !(l.chosen && l.status.startsWith('err_'))) continue;
-      if (l.chosen) exec(`UPDATE links SET status = 'available', last_error = ?, dest_dir = NULL, transferred_at = NULL WHERE surl = ?`, `已从网盘删除（${nowIso().slice(0, 10)}）`, l.surl);
+      if (l.chosen) exec(`UPDATE links SET status = 'available', last_error = ?, dest_dir = NULL, transferred_at = NULL, saved_names = NULL WHERE surl = ?`, `已从网盘删除（${nowIso().slice(0, 10)}）`, l.surl);
       else exec(`UPDATE links SET status = 'skipped', last_error = ? WHERE surl = ?`, '自动跳过：' + (l.reason || '未选中的版本'), l.surl);
     }
   });

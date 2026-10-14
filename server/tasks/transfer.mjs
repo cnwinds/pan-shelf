@@ -91,8 +91,8 @@ defineJob('transfer', {
         sinceQuota = Infinity;
         continue;
       }
-      exec(`UPDATE links SET status = ?, attempts = attempts + 1, last_error = ?, dest_dir = ?, transferred_at = ? WHERE surl = ?`,
-        r.status, r.detail || null, src.dest_dir, nowIso(), link.surl);
+      exec(`UPDATE links SET status = ?, attempts = attempts + 1, last_error = ?, dest_dir = ?, transferred_at = ?, saved_names = COALESCE(?, saved_names) WHERE surl = ?`,
+        r.status, r.detail || null, src.dest_dir, nowIso(), r.names?.length ? JSON.stringify(r.names) : null, link.surl);
       done++; sinceQuota++;
       if (r.status === 'saved') counts.saved++;
       else if (r.status === 'exists') counts.exists++;
