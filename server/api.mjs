@@ -16,6 +16,10 @@ import { enrichGameRow, ensureCoverFile, getCoverFile, detectImageMime, refreshS
 import { bus } from './bus.mjs';
 import { changeDestDir } from './destdir.mjs';
 import { panInventorySets, syncPanInventory, refreshIfStale } from './pan-inventory.mjs';
+import {
+  allReviews, hasMatchableBad, shareMatches, ensureShareFiles, badReviewOfLink, serialsOf, reviewsOfSerials,
+  gameReviewBrief, gameReviews, badGamesInPan, reviewStatus, syncReviews, refreshReviewsIfStale,
+} from './reviews.mjs';
 
 const bad = (code, msg) => Object.assign(new Error(msg), { statusCode: code });
 
@@ -55,10 +59,20 @@ const VIEWS = {
   transfer_failed: `EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND (l.status LIKE 'err\\_%' ESCAPE '\\' OR l.status = 'exc'))`,
   invalid: `EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status = 'invalid')`,
   skipped: `EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id AND l.status = 'skipped')`,
+  reviewed: reviewedSql,
 };
 
+// 盘游评过的游戏：编号或分享里的编号和评价对得上
+function reviewedSql() {
+  const titles = [...new Set(allReviews().map(r => r.title_id).filter(t => /^[A-Z0-9]+$/.test(t || '')))];
+  if (!titles.length) return '0 = 1';
+  const list = titles.map(t => `'${t}'`).join(',');
+  return `(UPPER(p.serial) IN (${list}) OR EXISTS (SELECT 1 FROM json_each('["' || REPLACE(UPPER(COALESCE(p.share_serials, '')), ',', '","') || '"]') j WHERE j.value IN (${list})))`;
+}
+
 function gamesQuery(q) {
-  const where = [VIEWS[q.view] || VIEWS.all], args = [];
+  const view = VIEWS[q.view] || VIEWS.all;
+  const where = [typeof view === 'function' ? view() : view], args = [];
   if (q.source_id) { where.push('p.source_id = ?'); args.push(q.source_id); }
   if (q.q) {
     // 空格分隔的多个关键词都要命中（「霍格沃茨 遗」「hogwarts」「PPSA01593」都能找到）
@@ -153,7 +167,7 @@ async function findPanPaths(src, row, serial, links) {
   return found.length ? found : [...savedNames].map(join);
 }
 
-const DETAIL_LINK_SQL = 'SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format, saved_names FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid';
+const DETAIL_LINK_SQL = 'SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format, saved_names, files_at, allow_bad FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid';
 
 async function gameDetail(source_id, row, enriched) {
   const links = all(DETAIL_LINK_SQL, source_id, String(row.post_id));
@@ -162,13 +176,15 @@ async function gameDetail(source_id, row, enriched) {
   const pan_state = computePanState(row, links, pan_size !== null || inPanInventory(row, enriched.serial, inv));
   const src = getSource(source_id);
   const pan_paths = pan_state === 'in_pan' && src?.dest_dir ? await findPanPaths(src, row, enriched.serial, links) : [];
-  return { ...enriched, pan_state, pan_size, pan_paths, links };
+  const reviews = gameReviews(row, enriched.serial, links);
+  return { ...enriched, pan_state, pan_size, pan_paths, links, reviews: reviews.items, reviews_checked: reviews.checked };
 }
 
 function computePanState(post, links, hasPanDir = false) {
   if (hasPanDir || links.some(l => l.status === 'saved' || l.status === 'exists')) return 'in_pan';
   if (links.some(l => l.status === 'pending')) return 'queued';
   if (links.some(l => l.status === 'available')) return 'available';
+  if (links.some(l => l.status === 'bad')) return 'bad';
   if (post.status === 'pending_detail') return 'pending_detail';
   if (post.status === 'failed' || links.some(l => l.status.startsWith('err_') || l.status === 'exc')) return 'failed';
   return 'no_link';
@@ -204,17 +220,19 @@ function listGames(q) {
     }
   }
   const inv = buildPanInventory(q.source_id);
+  const linksOf = new Map(rows.map(r => [r, all(linkStmt, r.source_id, r.post_id)]));
+  const matches = shareMatches([...linksOf.values()].flat().map(l => l.surl));
 
   return {
     total,
     page,
     size,
     rows: rows.map(r => {
-      const links = all(linkStmt, r.source_id, r.post_id);
+      const links = linksOf.get(r);
       const enriched = enrichGameRow(r, storeMetaMap);
       const pan_size = matchPanSize(r, enriched.serial, inv);
       const pan_state = computePanState(r, links, pan_size !== null || inPanInventory(r, enriched.serial, inv));
-      return { ...enriched, pan_state, pan_size, links };
+      return { ...enriched, pan_state, pan_size, links, review: gameReviewBrief(r, enriched.serial, links, matches) };
     }),
   };
 }
@@ -238,7 +256,63 @@ function selectedSurls(body, { withSkipped = false } = {}) {
   return [];
 }
 
-function gameAction(body) {
+// 加入网盘时会转存的链接：有「可入盘」的用它们，否则（还没入盘时）从没失效的链接里按优选规则挑
+function linksToAdd(source_id, id) {
+  const available = all(`SELECT surl FROM links WHERE source_id = ? AND post_id = ? AND status = 'available'`, source_id, id);
+  if (available.length) return available.map(l => l.surl);
+  const existing = all(`SELECT surl, pwd, remark, status FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid`, source_id, id);
+  if (!existing.length || existing.some(l => ['saved', 'exists', 'pending'].includes(l.status))) return [];
+  const candidates = existing.filter(l => l.status !== 'invalid');
+  if (!candidates.length) return [];
+  const picked = candidates.some(l => l.remark === null) ? candidates.map(l => ({ ...l, chosen: true })) : pickLinks(candidates);
+  return picked.filter(l => l.chosen).map(l => l.surl);
+}
+
+// 编号对得上某条「不能玩」评价的游戏，先列出要转存的分享核对 md5（就几次请求），这样能当场提醒
+async function checkSharesBeforeAdd(source_id, ids) {
+  if (!hasMatchableBad()) return;
+  for (const id of ids) {
+    const post = one('SELECT serial, share_serials FROM posts WHERE source_id = ? AND post_id = ?', source_id, id);
+    if (!reviewsOfSerials(serialsOf(post)).some(r => !r.playable)) continue;
+    for (const surl of linksToAdd(source_id, id)) {
+      const link = one('SELECT surl, pwd, files_at FROM links WHERE surl = ?', surl);
+      if (link) await ensureShareFiles(link);
+    }
+  }
+}
+
+async function addToPan(body) {
+  const { source_id } = body;
+  const ids = (body.post_ids || []).map(String);
+  if (!ids.length) throw bad(400, '请选择要加入网盘的游戏');
+  await checkSharesBeforeAdd(source_id, ids);
+  let n = 0, games = 0;
+  const blocked = [];
+  tx(() => ids.forEach(id => {
+    const surls = linksToAdd(source_id, id);
+    const bads = new Map(surls.map(s => [s, badReviewOfLink(s)]).filter(([, r]) => r));
+    // 有别的版本能转就只转它们；全是标记过不能玩的，不加并告诉界面，你确认后带 force 再来
+    const use = body.force || bads.size === surls.length ? surls : surls.filter(s => !bads.has(s));
+    if (!body.force && use.length && use.every(s => bads.has(s))) {
+      const post = one('SELECT title, custom_name FROM posts WHERE source_id = ? AND post_id = ?', source_id, id);
+      const r = bads.get(use[0]);
+      blocked.push({ post_id: id, title: post?.custom_name || post?.title || id, review: { playable: r.playable, note: r.note, firmware: r.firmware, at: r.at, device: r.device, name: r.name } });
+      use.forEach(s => exec(`UPDATE links SET status = 'bad' WHERE surl = ? AND status = 'available'`, s));
+      return;
+    }
+    let c = 0;
+    for (const s of use) {
+      c += exec(`UPDATE links SET status = 'pending', last_error = NULL, allow_bad = ? WHERE source_id = ? AND post_id = ? AND surl = ?`,
+        bads.has(s) ? 1 : 0, source_id, id, s).changes;
+    }
+    n += c;
+    if (c) games++;
+  }));
+  if (!n && !blocked.length) throw bad(400, '所选游戏没有可加入的链接（可能已在网盘里、还没采集到链接，或链接已失效）');
+  return { queued: n, games, blocked, job: n ? jobs.enqueue('transfer', { source_id, trigger: 'manual' }) : null };
+}
+
+async function gameAction(body) {
   const { action, source_id } = body;
   if (!getSource(source_id)) throw bad(400, '需要指定来源');
   switch (action) {
@@ -251,45 +325,17 @@ function gameAction(body) {
     case 'transfer': {
       const surls = selectedSurls(body);
       if (!surls.length) throw bad(400, '所选游戏没有百度盘链接');
+      if (body.force) tx(() => surls.forEach(s => exec('UPDATE links SET allow_bad = 1 WHERE surl = ?', s)));
       return { job: jobs.enqueue('transfer', { source_id, params: { surls }, dedupe: false }) };
     }
     // 加入网盘：把所选游戏的「可入盘」链接排进转存队列（已在盘里的不重复转存）
-    case 'add': {
-      const ids = (body.post_ids || []).map(String);
-      if (!ids.length) throw bad(400, '请选择要加入网盘的游戏');
-      let n = 0, games = 0;
-      tx(() => ids.forEach(id => {
-        let c = exec(`UPDATE links SET status = 'pending', last_error = NULL WHERE source_id = ? AND post_id = ? AND status = 'available'`, source_id, id).changes;
-        if (!c) {
-          // 如果没有 available 链接，且尚未入盘，则从非失效链接中按优选规则挑出并加入队列
-          const existing = all(`SELECT surl, pwd, remark, status FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid`, source_id, id);
-          const alreadyIn = existing.some(l => ['saved', 'exists', 'pending'].includes(l.status));
-          if (!alreadyIn && existing.length) {
-            const candidates = existing.filter(l => l.status !== 'invalid');
-            if (candidates.length) {
-              const picked = candidates.some(l => l.remark === null)
-                ? candidates.map(l => ({ ...l, chosen: true }))
-                : pickLinks(candidates);
-              for (const l of picked) {
-                if (l.chosen) {
-                  c += exec(`UPDATE links SET status = 'pending', last_error = NULL WHERE source_id = ? AND post_id = ? AND surl = ?`, source_id, id, l.surl).changes;
-                }
-              }
-            }
-          }
-        }
-        n += c;
-        if (c) games++;
-      }));
-      if (!n) throw bad(400, '所选游戏没有可加入的链接（可能已在网盘里、还没采集到链接，或链接已失效）');
-      return { queued: n, games, job: jobs.enqueue('transfer', { source_id, trigger: 'manual' }) };
-    }
+    case 'add': return addToPan(body);
     case 'cancel_transfer': {
       const ids = (body.post_ids || []).map(String);
       if (!ids.length) throw bad(400, '请选择要取消排队的游戏');
       let n = 0;
       tx(() => ids.forEach(id => {
-        n += exec(`UPDATE links SET status = 'available', last_error = NULL WHERE source_id = ? AND post_id = ? AND status = 'pending'`, source_id, id).changes;
+        n += exec(`UPDATE links SET status = 'available', last_error = NULL, allow_bad = 0 WHERE source_id = ? AND post_id = ? AND status = 'pending'`, source_id, id).changes;
       }));
       return { cancelled: n };
     }
@@ -302,7 +348,7 @@ function gameAction(body) {
     case 'unskip': {
       const surls = selectedSurls(body, { withSkipped: action === 'unskip' });
       const [from, to] = action === 'skip'
-        ? [`status IN ('pending', 'available') OR status LIKE 'err\\_%' ESCAPE '\\' OR status = 'exc'`, 'skipped']
+        ? [`status IN ('pending', 'available', 'bad') OR status LIKE 'err\\_%' ESCAPE '\\' OR status = 'exc'`, 'skipped']
         : [`status = 'skipped'`, getSettings().transfer.auto ? 'pending' : 'available'];
       let n = 0;
       tx(() => surls.forEach(s => { n += exec(`UPDATE links SET status = ?, last_error = NULL WHERE surl = ? AND (${from})`, to, s).changes; }));
@@ -320,7 +366,7 @@ export default async function routes(app) {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     res.write('retry: 3000\n\n');
     const send = (type) => (data) => res.write(`event: ${type}\ndata: ${JSON.stringify(data ?? {})}\n\n`);
-    const types = ['job', 'progress', 'log', 'event', 'site', 'login', 'settings', 'account-changed', 'schedule', 'meta', 'pan_inventory'];
+    const types = ['job', 'progress', 'log', 'event', 'site', 'login', 'settings', 'account-changed', 'schedule', 'meta', 'pan_inventory', 'reviews'];
     const handlers = types.map(t => [t, send(t)]);
     handlers.forEach(([t, h]) => bus.on(t, h));
     const ping = setInterval(() => res.write(': ping\n\n'), 20000);
@@ -369,7 +415,31 @@ export default async function routes(app) {
   // ---------- 游戏库 ----------
   app.get('/api/games', async (req) => {
     refreshIfStale(req.query.source_id || listSources()[0]?.id);
+    refreshReviewsIfStale();
     return listGames(req.query);
+  });
+  // 打开详情时核对：把这个游戏的分享列一遍（分享内容不会变，列过的不再列），看是不是评过的那份
+  app.post('/api/games/check-reviews', async (req) => {
+    const { source_id, post_id } = req.body || {};
+    const row = one('SELECT * FROM posts WHERE source_id = ? AND post_id = ?', source_id, String(post_id || ''));
+    if (!row) throw bad(404, '游戏不存在');
+    const links = all(DETAIL_LINK_SQL, source_id, String(post_id));
+    const errors = [];
+    for (const l of links.filter(l => l.status !== 'invalid' && !l.files_at)) {
+      const e = await ensureShareFiles(l);
+      if (e) errors.push(`${l.surl}：${e}`);
+    }
+    const r = gameReviews(row, enrichGameRow(row).serial, links);
+    return { reviews: r.items, reviews_checked: r.checked, errors };
+  });
+
+  // ---------- 盘游评价 ----------
+  app.get('/api/reviews', async () => reviewStatus());
+  app.post('/api/reviews/sync', async () => { await syncReviews(); return reviewStatus(); });
+  app.get('/api/reviews/in-pan-bad', async (req) => {
+    const src = req.query.source_id ? getSource(req.query.source_id) : listSources()[0];
+    if (!src) throw bad(400, '需要指定来源');
+    return { games: await badGamesInPan(src.id) };
   });
   app.get('/api/games/detail', async (req) => {
     const { source_id, post_id } = req.query || {};

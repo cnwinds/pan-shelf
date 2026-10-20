@@ -1074,6 +1074,57 @@
   font-size: 0.66rem;
   line-height: 1.35;
 }
+/* 盘游评价：实心是评过的就是这份资源，虚线是只对得上游戏编号 */
+.tile-review {
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 0.66rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.tile-review.ok {
+  background: rgba(95, 211, 160, 0.16);
+  border: 1px solid rgba(95, 211, 160, 0.5);
+  color: var(--mint);
+}
+.tile-review.bad {
+  background: rgba(255, 138, 122, 0.16);
+  border: 1px solid rgba(255, 138, 122, 0.55);
+  color: var(--danger);
+}
+.tile-review.loose {
+  background: none;
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.review-item {
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--night);
+  font-size: 0.82rem;
+}
+.review-item.ok strong {
+  color: var(--mint);
+}
+.review-item.bad strong {
+  color: var(--danger);
+}
+.review-item.bad {
+  border-color: rgba(255, 138, 122, 0.4);
+}
+.review-item.other {
+  opacity: 0.6;
+  border-color: var(--line);
+}
+.review-match {
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.7rem;
+}
 
 /* 详情页评分分布 */
 .rating-box {

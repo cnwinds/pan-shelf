@@ -35,6 +35,7 @@ export function linkStatus(s: string): { label: string; cls: string } {
   if (s === 'exists') return { label: '盘里已有', cls: 'bg-ok-soft text-ok' };
   if (s === 'invalid') return { label: '链接失效', cls: 'bg-line-2 text-muted' };
   if (s === 'skipped') return { label: '已跳过', cls: 'bg-line-2 text-muted' };
+  if (s === 'bad') return { label: '盘游说不能玩', cls: 'bg-bad-soft text-bad' };
   if (s === 'err_quota') return { label: '空间不足', cls: 'bg-bad-soft text-bad' };
   if (s === 'err_pwd') return { label: '提取码错误', cls: 'bg-bad-soft text-bad' };
   if (s.startsWith('err_') || s === 'exc') return { label: '转存失败', cls: 'bg-bad-soft text-bad' };

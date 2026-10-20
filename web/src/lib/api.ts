@@ -84,9 +84,33 @@ export interface LoginState {
   qrcode_url?: string;
   expires_at?: string;
 }
-export type PanState = 'in_pan' | 'queued' | 'available' | 'pending_detail' | 'failed' | 'no_link';
+export type PanState = 'in_pan' | 'queued' | 'available' | 'bad' | 'pending_detail' | 'failed' | 'no_link';
 
-export interface GameLink { surl: string; pwd: string; status: string; attempts: number; last_error: string | null; dest_dir: string | null; transferred_at: string | null; remark: string | null; format: 'exfat' | 'folder' | 'pkg' | 'unknown' | null }
+export interface GameLink { surl: string; pwd: string; status: string; attempts: number; last_error: string | null; dest_dir: string | null; transferred_at: string | null; remark: string | null; format: 'exfat' | 'folder' | 'pkg' | 'unknown' | null; files_at?: string | null; allow_bad?: number }
+
+/** 盘游里的一条评价。at 是秒级时间戳，device 是评价所在设备（「PS5」「电脑 XXX」） */
+export interface Review {
+  fingerprint: string;
+  playable: boolean;
+  note: string;
+  firmware: string;
+  at: number;
+  device: string;
+  name: string | null;
+}
+/** exact：这个游戏的某条分享就是评过的那份；否则只是同一个编号评过 */
+export interface ReviewBrief extends Review { exact: boolean }
+/** match：this 就是这条分享（surl）；other 分享都核对过，不是评过的那份；unknown 还没核对 */
+export interface GameReview extends Review { match: 'this' | 'other' | 'unknown'; surl?: string }
+export interface ReviewStatus {
+  at: string | null;
+  error: string | null;
+  total: number;
+  bad: number;
+  devices: { id: string; name: string; count: number; bad: number }[];
+}
+export interface InPanBadGame { serial: string; path: string; size: number; post_id: string | null; title: string; review: Review }
+export interface BlockedAdd { post_id: string; title: string; review: Review }
 export interface Game {
   source_id: string;
   post_id: string;
@@ -135,6 +159,9 @@ export interface Game {
   pan_state?: PanState;
   pan_size?: number | null;
   pan_paths?: string[];
+  review?: ReviewBrief | null;
+  reviews?: GameReview[];
+  reviews_checked?: boolean;
 }
 
 export interface Settings {

@@ -23,7 +23,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-react';
-import { api, type Game, type Job, type PanState, type RemovalPreview } from '../lib/api';
+import { api, type BlockedAdd, type Game, type GameReview, type Job, type PanState, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
 import { useAccount, useSetup, useSources } from '../lib/hooks';
 import { Dropdown } from '../components/Dropdown';
 import { Chip, Empty, ErrorNote, Modal, cx, linkStatus } from '../components/ui';
@@ -51,6 +51,7 @@ const EXTRA_FILTERS: { id: string; label: string }[] = [
   { id: 'detail_failed', label: '抓取失败' },
   { id: 'no_link', label: '无网盘链接' },
   { id: 'skipped', label: '已跳过' },
+  { id: 'reviewed', label: '盘游评过' },
 ];
 
 const REGION_NAMES: Record<string, string> = {
@@ -132,6 +133,25 @@ function getPanState(g: Game): PanState {
   return 'no_link';
 }
 
+// 「PS5 上 2026/10/18」
+export function reviewWhere(r: Review): string {
+  return `${r.device || '盘游'} 上 ${new Date(r.at * 1000).toLocaleDateString('zh-CN')}`;
+}
+export function reviewVerdict(r: Review): string {
+  return `${r.playable ? '能正常玩' : '不能玩'}${r.note ? `：${r.note}` : ''}${r.firmware ? `（固件 ${r.firmware}）` : ''}`;
+}
+
+function TileReview({ r }: { r: ReviewBrief }) {
+  const title = r.exact
+    ? `盘游里评过这份资源：${reviewWhere(r)}标记${reviewVerdict(r)}`
+    : `盘游评过这个游戏（${reviewWhere(r)}标记${reviewVerdict(r)}），但不一定是这里的这份资源`;
+  return (
+    <span className={cx('tile-review', r.playable ? 'ok' : 'bad', !r.exact && 'loose')} title={title}>
+      {r.exact ? (r.playable ? '能玩' : '不能玩') : r.playable ? '评过·能玩' : '评过·有问题'}
+    </span>
+  );
+}
+
 export function Games() {
   const [sp, setSp] = useSearchParams();
   const { data: sources } = useSources();
@@ -191,9 +211,11 @@ export function Games() {
     qc.invalidateQueries({ queryKey: ['overview'] });
   };
 
+  const [blocked, setBlocked] = useState<BlockedAdd[] | null>(null);
+
   const action = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
-      api.post<{ job?: Job; changed?: number; cancelled?: number; reset_links?: number; reset_posts?: number; games?: number }>(
+      api.post<{ job?: Job | null; changed?: number; cancelled?: number; reset_links?: number; reset_posts?: number; games?: number; blocked?: BlockedAdd[] }>(
         '/games/actions',
         { source_id: sourceId, ...body }
       ),
@@ -201,11 +223,15 @@ export function Games() {
       setSelected(new Set());
       refreshAll();
       const a = body.action;
+      if (a === 'add' && r.blocked?.length) {
+        setBlocked(r.blocked);
+        if (!r.games) return setNotice(null);
+      }
       setNotice(
         a === 'retry_failed'
           ? `已重置 ${r.reset_links} 条失败链接、${r.reset_posts} 个抓取失败的游戏${r.job ? '，转存任务已启动' : ''}`
           : a === 'add'
-            ? `已把 ${r.games} 个游戏加入转存队列，正在后台转存入盘`
+            ? `已把 ${r.games} 个游戏加入转存队列，正在后台转存入盘${r.blocked?.length ? `；另外 ${r.blocked.length} 个盘游标记过不能玩，没有加入` : ''}`
             : a === 'cancel_transfer'
               ? `已取消 ${r.cancelled} 条待转存链接的排队`
               : a === 'skip'
@@ -487,11 +513,11 @@ export function Games() {
           initialGame={activeGameFromList}
           quotaFree={acc?.quota?.free}
           onClose={() => setActivePostId(null)}
-          onAdd={() => action.mutate({ action: 'add', post_ids: [activePostId] })}
+          onAdd={force => action.mutate({ action: 'add', post_ids: [activePostId], force })}
           onCancelTransfer={() => action.mutate({ action: 'cancel_transfer', post_ids: [activePostId] })}
           onRemove={() => setRemoving([activePostId])}
           onRecrawl={() => action.mutate({ action: 'recrawl', post_ids: [activePostId] })}
-          onLinkAction={(act, surl) => action.mutate({ action: act, surls: [surl] })}
+          onLinkAction={(act, surl, force) => action.mutate({ action: act, surls: [surl], force })}
           busy={action.isPending}
           onUpdated={refreshAll}
         />
@@ -510,7 +536,50 @@ export function Games() {
           }}
         />
       )}
+
+      {blocked && (
+        <BlockedDialog
+          items={blocked}
+          busy={action.isPending}
+          onClose={() => setBlocked(null)}
+          onForce={() => {
+            action.mutate({ action: 'add', post_ids: blocked.map(b => b.post_id), force: true });
+            setBlocked(null);
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function BlockedDialog({ items, busy, onClose, onForce }: { items: BlockedAdd[]; busy: boolean; onClose: () => void; onForce: () => void }) {
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={items.length > 1 ? `${items.length} 个游戏盘游标记过不能玩` : '盘游标记过这个游戏不能玩'}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>不加了</button>
+          <button className="btn btn-danger" disabled={busy} onClick={onForce}>仍然加入</button>
+        </>
+      }
+    >
+      <div className="space-y-3 text-[13px]">
+        <p className="text-muted">
+          要转存的分享和你在盘游里评过的那份资源是同一份（文件完全一样），转存下来多半还是玩不了。
+          如果后来换了固件或者想再试一次，可以仍然加入。
+        </p>
+        <div className="max-h-[48vh] space-y-2 overflow-auto pr-1">
+          {items.map(b => (
+            <div key={b.post_id} className="rounded-lg border border-line bg-[#131a27] p-3">
+              <div className="font-medium text-ink">{b.title}</div>
+              <div className="mt-1 text-xs text-[#ff8a7a]">{reviewWhere(b.review)}标记{reviewVerdict(b.review)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -766,6 +835,7 @@ function GameTile({
         {(game.has_cn_sub || game.has_cn_voice) && (
           <span className="tile-cn" title={game.has_cn_voice ? '有中文语音' : '有中文字幕'}>中</span>
         )}
+        {game.review && <TileReview r={game.review} />}
         {game.rating != null && (
           <span className="tile-rating" title={`PS Store 评分 ${game.rating}（${game.rating_count} 人评分）`}>
             ★ {game.rating.toFixed(1)}
@@ -795,11 +865,11 @@ function GameDrawer({
   initialGame: Game | null;
   quotaFree?: number;
   onClose: () => void;
-  onAdd: () => void;
+  onAdd: (force?: boolean) => void;
   onCancelTransfer: () => void;
   onRemove: () => void;
   onRecrawl: () => void;
-  onLinkAction: (action: string, surl: string) => void;
+  onLinkAction: (action: string, surl: string, force?: boolean) => void;
   busy: boolean;
   onUpdated: () => void;
 }) {
@@ -834,6 +904,20 @@ function GameDrawer({
 
   useEffect(() => setIntroOpen(false), [postId]);
 
+  // 盘游评过同编号的游戏、但还没核对分享内容时，打开详情就列一遍分享看是不是同一份资源
+  const needsCheck = !!detail.data?.game.reviews?.some(r => r.match === 'unknown');
+  const checkReviews = useMutation({
+    mutationFn: () => api.post<{ reviews: GameReview[]; reviews_checked: boolean; errors: string[] }>('/games/check-reviews', { source_id: sourceId, post_id: postId }),
+    onSuccess: () => { detail.refetch(); onUpdated(); },
+  });
+  const checkedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!needsCheck || checkedFor.current === postId) return;
+    checkedFor.current = postId;
+    checkReviews.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsCheck, postId]);
+
   const refreshMeta = useMutation({
     mutationFn: () =>
       api.post<{ ok: boolean; game?: Game }>('/games/meta-refresh', {
@@ -867,6 +951,7 @@ function GameDrawer({
   const panState = getPanState(game);
   const isInPan = panState === 'in_pan';
   const isQueued = panState === 'queued';
+  const knownBad = game.reviews?.find(r => r.match === 'this' && !r.playable);
   const hue = hueFrom(game.serial || game.display_name || game.post_id);
   const [prefix, digits] = splitSerial(game.serial, game.post_id);
   const coverSrc = game.cover_url
@@ -1004,6 +1089,21 @@ function GameDrawer({
                   取消排队
                 </button>
               </div>
+            ) : knownBad && !game.links.some(l => l.status === 'available' && l.surl !== knownBad.surl) ? (
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-[14px] font-semibold text-[#ff8a7a]">
+                    <AlertTriangle size={15} />
+                    盘游标记过这份资源不能玩
+                  </div>
+                  <div className="mt-1 text-xs text-muted">
+                    {reviewWhere(knownBad)}标记{reviewVerdict(knownBad)}。分享里的文件和那次一模一样，自动转存会跳过它
+                  </div>
+                </div>
+                <button type="button" className="cta ghost shrink-0" disabled={busy} onClick={() => onAdd(true)}>
+                  仍然加入
+                </button>
+              </div>
             ) : (
               <div className="flex items-center justify-between gap-4">
                 <div className="min-w-0">
@@ -1021,7 +1121,7 @@ function GameDrawer({
                   type="button"
                   className="cta shrink-0"
                   disabled={busy || game.links.length === 0}
-                  onClick={onAdd}
+                  onClick={() => onAdd()}
                 >
                   <CloudDownload size={16} />
                   加入网盘
@@ -1029,6 +1129,10 @@ function GameDrawer({
               </div>
             )}
           </section>
+
+          {!!game.reviews?.length && (
+            <ReviewSection reviews={game.reviews} checking={checkReviews.isPending} checkErrors={checkReviews.data?.errors || []} />
+          )}
 
           {/* 游戏介绍与规格 */}
           {(Number(game.concept_id) > 0 || game.description) && (
@@ -1216,6 +1320,15 @@ function GameDrawer({
                         </div>
                       )}
 
+                      {(() => {
+                        const r = game.reviews?.find(x => x.surl === l.surl);
+                        return r ? (
+                          <div className={cx('text-[11px]', r.playable ? 'text-ok' : 'text-bad')}>
+                            盘游评过这份：{reviewVerdict(r)}
+                          </div>
+                        ) : null;
+                      })()}
+
                       <div className="flex items-center justify-between gap-2 pt-0.5 text-[11px] text-muted">
                         {(() => {
                           const text = l.transferred_at
@@ -1229,9 +1342,10 @@ function GameDrawer({
                               type="button"
                               className="btn btn-sm h-6! px-2! text-[11px]!"
                               disabled={busy}
-                              onClick={() => onLinkAction('transfer', l.surl)}
+                              title={l.status === 'bad' ? '盘游标记过这份资源不能玩，仍然转存它' : undefined}
+                              onClick={() => onLinkAction('transfer', l.surl, l.status === 'bad' || undefined)}
                             >
-                              单独转存
+                              {l.status === 'bad' ? '仍然转存' : '单独转存'}
                             </button>
                           )}
                           {l.status === 'skipped' ? (
@@ -1312,7 +1426,47 @@ function GameDrawer({
   );
 }
 
-function RemoveDialog({
+const MATCH_LABEL: Record<GameReview['match'], string> = {
+  this: '就是这里的资源',
+  other: '另一份资源',
+  unknown: '同一个游戏',
+};
+
+function ReviewSection({ reviews, checking, checkErrors }: { reviews: GameReview[]; checking: boolean; checkErrors: string[] }) {
+  const unknown = reviews.some(r => r.match === 'unknown');
+  return (
+    <section className="intro">
+      <h3 className="intro-title">盘游评价</h3>
+      <div className="space-y-2">
+        {reviews.map(r => (
+          <div key={r.fingerprint} className={cx('review-item', r.playable ? 'ok' : 'bad', r.match === 'other' && 'other')}>
+            <div className="flex items-center gap-2">
+              <strong>{r.playable ? '能正常玩' : '不能玩'}</strong>
+              <span className="review-match">{MATCH_LABEL[r.match]}</span>
+              <span className="ml-auto text-[11px] text-muted">{reviewWhere(r)}</span>
+            </div>
+            {(r.note || r.firmware || (r.match !== 'this' && r.name)) && (
+              <div className="mt-1 text-xs text-[#c3ccdb]">
+                {[r.note, r.firmware && `固件 ${r.firmware}`, r.match !== 'this' && r.name && `评的是「${r.name}」`].filter(Boolean).join(' · ')}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {unknown && (
+        <p className="intro-empty">
+          {checking
+            ? '正在核对分享里的文件，看是不是评过的那份…'
+            : checkErrors.length
+              ? `没能列出分享里的文件，暂时认不出是不是评过的那份（${checkErrors[0]}）`
+              : '评价里没有记分卷信息，认不出是不是这份资源；在盘游里打开一次这个游戏的详情就会补上'}
+        </p>
+      )}
+    </section>
+  );
+}
+
+export function RemoveDialog({
   sourceId,
   postIds,
   onClose,

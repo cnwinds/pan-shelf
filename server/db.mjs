@@ -127,6 +127,33 @@ CREATE TABLE IF NOT EXISTS pan_items (
 );
 CREATE INDEX IF NOT EXISTS idx_pan_items_concept ON pan_items(source_id, concept_id);
 
+-- 盘游的评价：盘游把每台设备的评价写到网盘 /盘游/评价/<设备>.json，这里是读回来的副本。
+-- 同一个指纹以 at 最新的那条为准，removed = 1 是清除记录。parts 是主游戏各分卷 [{md5,size,name}]
+CREATE TABLE IF NOT EXISTS reviews (
+  fingerprint TEXT NOT NULL,
+  device_id   TEXT NOT NULL,
+  device_name TEXT,
+  title_id    TEXT,
+  name        TEXT,
+  playable    INTEGER NOT NULL DEFAULT 1,
+  note        TEXT,
+  firmware    TEXT,
+  at          INTEGER NOT NULL DEFAULT 0,
+  removed     INTEGER NOT NULL DEFAULT 0,
+  parts       TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (fingerprint, device_id)
+);
+
+-- 分享里的文件（按需列出，分享内容不会变，列一次就够），用 md5 和评价比对
+CREATE TABLE IF NOT EXISTS share_files (
+  surl TEXT NOT NULL,
+  path TEXT NOT NULL,
+  md5  TEXT,
+  size INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (surl, path)
+);
+CREATE INDEX IF NOT EXISTS idx_share_files_md5 ON share_files(md5);
+
 CREATE TABLE IF NOT EXISTS store_meta (
   concept_id   INTEGER PRIMARY KEY,
   found        INTEGER NOT NULL DEFAULT 0,
@@ -160,6 +187,10 @@ if (!linkCols.has('remark')) db.exec('ALTER TABLE links ADD COLUMN remark TEXT')
 if (!linkCols.has('format')) db.exec('ALTER TABLE links ADD COLUMN format TEXT');
 // 转存时分享里的顶层文件/目录名（JSON 数组），规整改名前用它在网盘里定位
 if (!linkCols.has('saved_names')) db.exec('ALTER TABLE links ADD COLUMN saved_names TEXT');
+// 分享里的文件列进 share_files 的时间；没列过为空
+if (!linkCols.has('files_at')) db.exec('ALTER TABLE links ADD COLUMN files_at TEXT');
+// 盘游标记过不能玩、你确认「仍然加入」的链接，转存时不再拦
+if (!linkCols.has('allow_bad')) db.exec('ALTER TABLE links ADD COLUMN allow_bad INTEGER NOT NULL DEFAULT 0');
 const postCols = new Set(all('PRAGMA table_info(posts)').map(c => c.name));
 if (!postCols.has('serial')) db.exec('ALTER TABLE posts ADD COLUMN serial TEXT');
 // 分享里文件名上的编号（站点写的编号有时和实际内容不同），逗号分隔，删除游戏时按需查询并缓存

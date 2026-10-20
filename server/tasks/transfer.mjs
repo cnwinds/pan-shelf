@@ -6,6 +6,21 @@ import { getSettings } from '../settings.mjs';
 import { notify } from '../notify.mjs';
 import { nowIso, fmtBytes } from '../util.mjs';
 import { excludeRe, pruneExcluded } from './prune.mjs';
+import { ensureShareFiles, badReviewOfLink, hasMatchableBad, freshReviews } from '../reviews.mjs';
+
+// 盘游标记过不能玩的那份资源（分享里有它主游戏的全部分卷）就不转存；你点过「仍然加入」的不拦
+async function knownBad(ctx, link) {
+  if (link.allow_bad || !hasMatchableBad()) return null;
+  const error = await ensureShareFiles(link);
+  if (error) {
+    ctx.log('warn', `没能列出分享里的文件，不核对评价直接转存：${link.title || link.surl}（${error}）`);
+    return null;
+  }
+  return badReviewOfLink(link.surl);
+}
+
+export const badReason = (r) =>
+  `盘游标记过不能玩${r.note ? `：${r.note}` : ''}（${r.device || '盘游'}${r.firmware ? `，固件 ${r.firmware}` : ''}，${new Date(r.at * 1000).toLocaleDateString('zh-CN')}）`;
 
 const GB = 1024 ** 3;
 
@@ -24,8 +39,10 @@ defineJob('transfer', {
     if (!src) throw new Error('来源不存在');
     const p = ctx.job.params;
     await requireLogin(ctx);
+    await freshReviews();
 
-    const counts = { saved: 0, exists: 0, invalid: 0, failed: 0 };
+    const counts = { saved: 0, exists: 0, invalid: 0, failed: 0, bad: 0 };
+    const badTitles = [];
     const limit = p.limit || getSettings().transfer.max_per_run || Infinity;
     const only = p.surls ? new Set(p.surls) : null;
     const tried = new Set();
@@ -81,6 +98,16 @@ defineJob('transfer', {
       ctx.progress({ phase: 'transfer', done, total: done + remaining() + 1, current: link.title || link.surl, counts, free: lastFree });
       if (link.status !== 'pending' && only) exec(`UPDATE links SET status = 'pending' WHERE surl = ?`, link.surl);
 
+      const bad = await knownBad(ctx, link);
+      if (bad) {
+        exec(`UPDATE links SET status = 'bad', last_error = ? WHERE surl = ?`, badReason(bad), link.surl);
+        counts.bad++;
+        badTitles.push(link.title || link.surl);
+        ctx.log('warn', `没有转存 ${link.title || link.surl}：${badReason(bad)}。要转存的话在游戏库里点「仍然加入」`);
+        ctx.progress({ done, total: done + remaining(), counts });
+        continue;
+      }
+
       const r = await bd.transferOne(link.surl, link.pwd, src.dest_dir, { timeoutSec: getSettings().transfer.timeout_sec, signal: ctx.signal });
       if (r.status === 'err_quota') {
         exec(`UPDATE links SET last_error = ?, attempts = attempts + 1 WHERE surl = ?`, r.detail, link.surl);
@@ -109,9 +136,13 @@ defineJob('transfer', {
       catch (e) { if (ctx.signal.aborted) throw e; ctx.log('warn', '清理排除项失败：' + e.message); }
     }
     ctx.progress({ phase: 'done', current: null, done, total: done, counts });
-    return { ...counts, total: done, pending_left: remaining(), ...(pruned?.deleted ? { pruned: pruned.deleted, pruned_bytes: pruned.bytes } : {}) };
+    return { ...counts, total: done, pending_left: remaining(), bad_titles: badTitles.slice(0, 5), ...(pruned?.deleted ? { pruned: pruned.deleted, pruned_bytes: pruned.bytes } : {}) };
   },
   onDone(job, s) {
+    if (s?.bad) {
+      notify('run_done', 'warn', `${s.bad} 个游戏盘游标记过不能玩，没有转存`,
+        `${s.bad_titles.join('、')}${s.bad > 5 ? ' 等' : ''}。确实要的话在游戏库里打开它，点「仍然加入」。`);
+    }
     if (!s || s.total === 0) return;
     const name = getSource(job.source_id)?.name || job.source_id;
     notify('run_done', s.failed ? 'warn' : 'success', `转存完成：新增 ${s.saved} 个`,

@@ -135,7 +135,17 @@ export async function listDir(dir) {
     out.push(...(j.list || []));
     if ((j.list || []).length < 1000) break;
   }
-  return out.map(e => ({ name: e.server_filename, isdir: !!+e.isdir, size: +e.size || 0, mtime: e.server_mtime, path: e.path }));
+  return out.map(e => ({ name: e.server_filename, isdir: !!+e.isdir, size: +e.size || 0, mtime: e.server_mtime, path: e.path, fs_id: String(e.fs_id), md5: e.md5 || null }));
+}
+
+// 读网盘里的小文件（几 KB 的 JSON），返回文本
+export async function readSmallFile(fsId, { timeoutSec = 30 } = {}) {
+  const j = await panApi('/api/filemetas', { query: { dlink: '1', fsids: `[${fsId}]` } });
+  const dlink = j.errno === 0 ? j.info?.[0]?.dlink : null;
+  if (!dlink) throw new Error(`取下载地址失败 errno=${j.errno}`);
+  const r = await fetch(dlink, { headers: { 'user-agent': 'pan.baidu.com', cookie: cookieHeader() }, signal: AbortSignal.timeout(timeoutSec * 1000) });
+  if (!r.ok) throw new Error(`下载失败 HTTP ${r.status}`);
+  return r.text();
 }
 
 // ---------- 分享内容（匿名，凭提取码） ----------
@@ -151,7 +161,8 @@ const SHARE_ERR = {
 };
 const INVALID_ERRNO = [105, -7, 117, -21, 115];
 
-// 递归列出分享里的全部文件。返回 { files: [{ rel, name, size }] } 或 { error }
+// 递归列出分享里的全部文件。返回 { files: [{ rel, name, size, md5 }] } 或 { error }
+// md5 和转存后网盘里看到的一样（盘游的评价按它认同一份资源）
 export async function listShare(surl, pwd, { delayMs = 400 } = {}) {
   const short = surl.replace(/^1/, '');
   try {
@@ -173,7 +184,7 @@ export async function listShare(surl, pwd, { delayMs = 400 } = {}) {
         if (j.errno !== 0) return { error: SHARE_ERR[j.errno] || `列目录失败 errno=${j.errno}` };
         for (const e of j.list || []) {
           if (+e.isdir) queue.push(e.path);
-          else files.push({ rel: e.path, name: e.server_filename, size: +e.size });
+          else files.push({ rel: e.path, name: e.server_filename, size: +e.size, md5: e.md5 || null });
         }
         await sleep(delayMs);
         if ((j.list || []).length < 100) break;
