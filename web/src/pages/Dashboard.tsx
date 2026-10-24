@@ -19,7 +19,7 @@ export function Dashboard() {
   });
 
   if (error) return <ErrorNote error={error} />;
-  if (!ov) return <div className="text-muted">加载中…</div>;
+  if (!ov) return <DashboardSkeleton />;
   const source = ov.sources.find(s => s.id === sid) || ov.sources.find(s => s.enabled) || ov.sources[0];
   const sourceName = (id: string | null) => ov.sources.find(s => s.id === id)?.name;
 
@@ -66,6 +66,27 @@ export function Dashboard() {
         </aside>
       </div>
     </>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div aria-busy="true" aria-label="正在加载总览">
+      <PageHeader title="总览" desc={<span className="skel inline-block h-3.5 w-72 align-middle" />} />
+      <div className="grid gap-3 md:grid-cols-3 md:gap-12">
+        {[0, 1, 2].map(i => (
+          <div key={i} className="panel flex h-[126px] flex-col gap-3 p-5">
+            <div className="skel h-5 w-20" />
+            <div className="skel h-8 w-28" />
+            <div className="skel mt-auto h-1.5 w-full" />
+          </div>
+        ))}
+      </div>
+      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="skel h-[120px] rounded-xl" />
+        <div className="skel h-[240px] rounded-xl" />
+      </div>
+    </div>
   );
 }
 

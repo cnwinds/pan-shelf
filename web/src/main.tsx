@@ -10,6 +10,7 @@ import { Games } from './pages/Games';
 import { Jobs } from './pages/Jobs';
 import { Storage } from './pages/Storage';
 import { SettingsPage } from './pages/Settings';
+import { NotFound, RouteError } from './pages/NotFound';
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: true, retry: 1 } } });
 
@@ -17,15 +18,21 @@ const router = createBrowserRouter([
   {
     element: <Layout />,
     children: [
-      { path: '/', element: <Games /> },
-      { path: '/games', element: <Games /> },
-      { path: '/overview', element: <Dashboard /> },
-      { path: '/jobs', element: <Jobs /> },
-      { path: '/jobs/:id', element: <Jobs /> },
-      { path: '/storage', element: <Storage /> },
-      { path: '/storage/:tab', element: <Storage /> },
-      { path: '/settings', element: <SettingsPage /> },
-      { path: '/settings/:tab', element: <SettingsPage /> },
+      {
+        errorElement: <RouteError />,
+        children: [
+          { path: '/', element: <Games /> },
+          { path: '/games', element: <Games /> },
+          { path: '/overview', element: <Dashboard /> },
+          { path: '/jobs', element: <Jobs /> },
+          { path: '/jobs/:id', element: <Jobs /> },
+          { path: '/storage', element: <Storage /> },
+          { path: '/storage/:tab', element: <Storage /> },
+          { path: '/settings', element: <SettingsPage /> },
+          { path: '/settings/:tab', element: <SettingsPage /> },
+          { path: '*', element: <NotFound /> },
+        ],
+      },
     ],
   },
 ]);

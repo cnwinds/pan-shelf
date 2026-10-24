@@ -111,6 +111,12 @@ export function Layout() {
               <Link to="/settings/account" className="quota-pill text-[#ff8a7a]!">
                 网盘未登录
               </Link>
+            ) : !acc || !setup.ready ? (
+              <span className="quota-pill placeholder" aria-hidden="true">
+                <span>网盘剩余</span>
+                <strong>0.00 TB</strong>
+                <span className="quota-mini-bar" />
+              </span>
             ) : null}
 
             <nav className="tabs" aria-label="主导航">

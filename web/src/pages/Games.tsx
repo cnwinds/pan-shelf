@@ -147,7 +147,8 @@ function TileReview({ r }: { r: ReviewBrief }) {
     : `盘游评过这个游戏（${reviewWhere(r)}标记${reviewVerdict(r)}），但不一定是这里的这份资源`;
   return (
     <span className={cx('tile-review', r.playable ? 'ok' : 'bad', !r.exact && 'loose')} title={title}>
-      {r.exact ? (r.playable ? '能玩' : '不能玩') : r.playable ? '评过·能玩' : '评过·有问题'}
+      {r.playable ? <Check size={11} strokeWidth={3} /> : <X size={11} strokeWidth={3} />}
+      {r.playable ? '能玩' : '有问题'}
     </span>
   );
 }
@@ -192,6 +193,17 @@ export function Games() {
     queryFn: () => api.get<Record<string, number>>(`/games/facets?source_id=${sourceId}`),
     enabled: !!sourceId,
   });
+  const narrowed = !!q || cnOnly || multiOnly;
+  const narrowedFacets = useQuery({
+    queryKey: ['facets', sourceId, q, cnOnly, multiOnly],
+    queryFn: () =>
+      api.get<Record<string, number>>(
+        `/games/facets?source_id=${sourceId}&q=${encodeURIComponent(q)}${cnOnly ? '&cn=1' : ''}${multiOnly ? '&multi=1' : ''}`
+      ),
+    enabled: !!sourceId && narrowed,
+    placeholderData: keepPreviousData,
+  });
+  const viewCounts = narrowed ? narrowedFacets.data : facets.data;
 
   const games = useQuery({
     queryKey: ['games', sourceId, view, sort, q, page, pageSize, cnOnly, multiOnly],
@@ -293,7 +305,7 @@ export function Games() {
       <div className="library-toolbar">
         <div className="toolbar-group">
           <h1 className="library-title">
-            游戏库 <span className="count">{total}</span>
+            游戏库 {games.data && <span className="count">{total}</span>}
           </h1>
           {sources && sources.length > 1 && (
             <Dropdown
@@ -307,8 +319,8 @@ export function Games() {
 
           <div className="filters" role="tablist" aria-label="网盘状态筛选">
             {PRIMARY_FILTERS.map(f => {
-              const count = facets.data?.[f.id];
-              if (f.id === 'pending_transfer' && !count && view !== 'pending_transfer') return null;
+              const count = viewCounts?.[f.id];
+              if (f.id === 'pending_transfer' && !queuedCount && view !== 'pending_transfer') return null;
               const isOn = view === f.id;
               return (
                 <button
@@ -332,7 +344,7 @@ export function Games() {
               ariaLabel="更多状态筛选"
               options={[
                 ...(isExtraView ? [{ value: '', label: '全部状态' }] : []),
-                ...EXTRA_FILTERS.map(f => ({ value: f.id, label: f.label, hint: facets.data?.[f.id] ?? 0 })),
+                ...EXTRA_FILTERS.map(f => ({ value: f.id, label: f.label, hint: viewCounts?.[f.id] ?? 0 })),
               ]}
             />
           </div>
@@ -460,7 +472,15 @@ export function Games() {
       )}
 
       {games.isPending ? (
-        <div className="py-20 text-center text-muted">正在加载游戏封面库…</div>
+        <div className="shelf" aria-busy="true" aria-label="正在加载游戏库">
+          {Array.from({ length: cols ? cols * 2 : 14 }, (_, i) => (
+            <div key={i} className="tile-skel" aria-hidden="true">
+              <div className="skel skel-art" />
+              <div className="skel skel-line" />
+              <div className="skel skel-line short" />
+            </div>
+          ))}
+        </div>
       ) : rows.length === 0 && setup.ready && !setup.done && !q ? (
         <div className="panel py-16">
           <Empty title="先完成初始设置">
@@ -770,6 +790,7 @@ function GameTile({
           </span>
         )}
         {isQueued && <span className="corner live">转存中</span>}
+        {game.review && !batchMode && <TileReview r={game.review} />}
         {panState === 'failed' && <span className="corner err">异常</span>}
         {panState === 'pending_detail' && <span className="corner warn">待抓详情</span>}
 
@@ -835,7 +856,6 @@ function GameTile({
         {(game.has_cn_sub || game.has_cn_voice) && (
           <span className="tile-cn" title={game.has_cn_voice ? '有中文语音' : '有中文字幕'}>中</span>
         )}
-        {game.review && <TileReview r={game.review} />}
         {game.rating != null && (
           <span className="tile-rating" title={`PS Store 评分 ${game.rating}（${game.rating_count} 人评分）`}>
             ★ {game.rating.toFixed(1)}

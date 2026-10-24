@@ -237,10 +237,10 @@ function listGames(q) {
   };
 }
 
-function facets(source_id) {
+function facets({ source_id, q, cn, multi }) {
   const out = {};
   for (const v of Object.keys(VIEWS)) {
-    const { w, args } = gamesQuery({ view: v, source_id });
+    const { w, args } = gamesQuery({ view: v, source_id, q, cn, multi });
     out[v] = one(`SELECT COUNT(*) n FROM posts p WHERE ${w}`, ...args).n;
   }
   return out;
@@ -455,7 +455,7 @@ export default async function routes(app) {
     }
     return { game: await gameDetail(source_id, row, enriched) };
   });
-  app.get('/api/games/facets', async (req) => facets(req.query.source_id));
+  app.get('/api/games/facets', async (req) => facets(req.query));
   app.post('/api/games/actions', async (req) => gameAction(req.body));
   app.post('/api/games/rename', async (req) => {
     const { source_id, post_id, name = '' } = req.body || {};
