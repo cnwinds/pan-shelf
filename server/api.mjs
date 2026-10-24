@@ -8,7 +8,7 @@ import { accountStatus, invalidateAccount, sitesStatus } from './health.mjs';
 import { startLogin, cancelLogin, loginState, saveManualLogin } from './login.mjs';
 import * as bd from './baidu.mjs';
 import { toast, webhook } from './notify.mjs';
-import { duChildren } from './tasks/du.mjs';
+import { duChildren, measureDir } from './tasks/du.mjs';
 import { resolveRemoval, resetLinks } from './tasks/remove.mjs';
 import { serialsFromName } from './tasks/normalize.mjs';
 import { pickLinks } from './linkpick.mjs';
@@ -155,7 +155,7 @@ async function listPanDirCached(dir) {
 }
 
 // 游戏在网盘里的实际位置：转存目录的顶层项里，名称含游戏编号（规整后就是编号目录）或等于转存时分享里的名字
-async function findPanPaths(src, row, serial, links) {
+async function findPanItems(src, row, serial, links) {
   const savedNames = new Set(links.flatMap(l => { try { return JSON.parse(l.saved_names || '[]'); } catch { return []; } }));
   const serials = new Set([serial, row.serial, ...String(row.share_serials || '').split(',')].map(s => String(s || '').trim().toUpperCase()).filter(Boolean));
   const join = (name) => `${src.dest_dir.replace(/\/+$/, '')}/${name}`;
@@ -163,8 +163,20 @@ async function findPanPaths(src, row, serial, links) {
   try { entries = await listPanDirCached(src.dest_dir); } catch {}
   const found = (entries || [])
     .filter(e => savedNames.has(e.name) || [...serialsFromName(e.name)].some(s => serials.has(String(s).toUpperCase())))
-    .map(e => e.path || join(e.name));
-  return found.length ? found : [...savedNames].map(join);
+    .map(e => ({ path: e.path || join(e.name), name: e.name, isdir: e.isdir, size: e.size }));
+  return found.length ? found : [...savedNames].map(name => ({ path: join(name), name, isdir: null, size: null }));
+}
+
+// 目录大小取用量扫描的结果，没扫过的为 null，由 /api/games/pan-size 按需统计；
+// 统计之后又转存过（补丁可能存进同一个编号目录）的结果作废
+function panFolders(items, links) {
+  const lastTransfer = links.map(l => l.transferred_at || '').sort().pop() || '';
+  return items.map(it => {
+    if (it.isdir === false) return { ...it, files: 1, scanned_at: null };
+    const row = one('SELECT size, files, scanned_at FROM du_results WHERE path = ?', it.path);
+    const du = row && row.scanned_at >= lastTransfer ? row : null;
+    return { ...it, size: du ? du.size : null, files: du ? du.files : null, scanned_at: du?.scanned_at || null };
+  });
 }
 
 const DETAIL_LINK_SQL = 'SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format, saved_names, files_at, allow_bad FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid';
@@ -175,9 +187,10 @@ async function gameDetail(source_id, row, enriched) {
   const pan_size = matchPanSize(row, enriched.serial, inv);
   const pan_state = computePanState(row, links, pan_size !== null || inPanInventory(row, enriched.serial, inv));
   const src = getSource(source_id);
-  const pan_paths = pan_state === 'in_pan' && src?.dest_dir ? await findPanPaths(src, row, enriched.serial, links) : [];
+  const pan_folders = pan_state === 'in_pan' && src?.dest_dir ? panFolders(await findPanItems(src, row, enriched.serial, links), links) : [];
+  const pan_paths = pan_folders.map(f => f.path);
   const reviews = gameReviews(row, enriched.serial, links);
-  return { ...enriched, pan_state, pan_size, pan_paths, links, reviews: reviews.items, reviews_checked: reviews.checked };
+  return { ...enriched, pan_state, pan_size, pan_paths, pan_folders, links, reviews: reviews.items, reviews_checked: reviews.checked };
 }
 
 function computePanState(post, links, hasPanDir = false) {
@@ -454,6 +467,18 @@ export default async function routes(app) {
       enriched = enrichGameRow(row);
     }
     return { game: await gameDetail(source_id, row, enriched) };
+  });
+  // 详情里统计游戏在网盘里的文件夹大小（递归列目录），force 时忽略已有的扫描结果重新统计
+  app.post('/api/games/pan-size', async (req) => {
+    const { source_id, post_id, force = false } = req.body || {};
+    const row = one('SELECT * FROM posts WHERE source_id = ? AND post_id = ?', source_id, String(post_id || ''));
+    if (!row) throw bad(404, '游戏不存在');
+    const src = getSource(source_id);
+    if (!src?.dest_dir) throw bad(400, '来源没有设置转存目录');
+    const links = all(DETAIL_LINK_SQL, source_id, String(post_id));
+    const folders = panFolders(await findPanItems(src, row, enrichGameRow(row).serial, links), links);
+    await Promise.all(folders.filter(f => f.isdir && (force || f.size == null)).map(f => measureDir(f.path)));
+    return { folders: panFolders(folders, links) };
   });
   app.get('/api/games/facets', async (req) => facets(req.query));
   app.post('/api/games/actions', async (req) => gameAction(req.body));

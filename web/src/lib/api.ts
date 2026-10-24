@@ -159,9 +159,20 @@ export interface Game {
   pan_state?: PanState;
   pan_size?: number | null;
   pan_paths?: string[];
+  pan_folders?: PanFolder[];
   review?: ReviewBrief | null;
   reviews?: GameReview[];
   reviews_checked?: boolean;
+}
+
+/** 游戏在网盘里的一项（一般是编号目录）。size 为 null 表示还没统计过 */
+export interface PanFolder {
+  path: string;
+  name: string;
+  isdir: boolean | null;
+  size: number | null;
+  files: number | null;
+  scanned_at: string | null;
 }
 
 export interface Settings {

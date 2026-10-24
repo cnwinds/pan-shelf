@@ -23,7 +23,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-react';
-import { api, type BlockedAdd, type Game, type GameReview, type Job, type PanState, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
+import { api, type BlockedAdd, type Game, type GameReview, type Job, type PanFolder, type PanState, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
 import { useAccount, useSetup, useSources } from '../lib/hooks';
 import { Dropdown } from '../components/Dropdown';
 import { Chip, Empty, ErrorNote, Modal, cx, linkStatus } from '../components/ui';
@@ -938,6 +938,21 @@ function GameDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsCheck, postId]);
 
+  // 网盘文件夹没统计过大小时，打开详情就统计一次（递归列目录，大目录要几秒）
+  const measure = useMutation({
+    mutationFn: (force: boolean) =>
+      api.post<{ folders: PanFolder[] }>('/games/pan-size', { source_id: sourceId, post_id: postId, force }),
+    onSuccess: () => { detail.refetch(); onUpdated(); },
+  });
+  const needsMeasure = !!detail.data?.game.pan_folders?.some(f => f.isdir && f.size == null);
+  const measuredFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!needsMeasure || measuredFor.current === postId) return;
+    measuredFor.current = postId;
+    measure.mutate(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsMeasure, postId]);
+
   const refreshMeta = useMutation({
     mutationFn: () =>
       api.post<{ ok: boolean; game?: Game }>('/games/meta-refresh', {
@@ -989,6 +1004,11 @@ function GameDrawer({
 
   const savedLink = game.links.find(l => l.status === 'saved' || l.status === 'exists');
   const panPath = game.pan_paths?.length ? game.pan_paths.join('、') : savedLink?.dest_dir || '';
+  const folders = game.pan_folders || [];
+  const panSize =
+    folders.length && folders.every(f => f.size != null)
+      ? folders.reduce((s, f) => s + (f.size || 0), 0)
+      : game.pan_size || 0;
   const preferredLink =
     savedLink ||
     game.links.find(l => l.status === 'available' || l.status === 'pending') ||
@@ -1058,7 +1078,7 @@ function GameDrawer({
                 <span>{game.platform || 'PS5'}</span>
                 {game.region && REGION_NAMES[game.region] && <span>{REGION_NAMES[game.region]}</span>}
                 {primaryFormat && <span>{primaryFormat}</span>}
-                {game.pan_size ? <span className="num">{bytes(game.pan_size)}</span> : null}
+                {panSize ? <span className="num">{bytes(panSize)}</span> : measure.isPending ? <span>统计大小…</span> : null}
               </div>
             </div>
           </div>
@@ -1068,6 +1088,7 @@ function GameDrawer({
           {/* 核心网盘操作区：加入网盘 / 退出网盘 */}
           <section className={cx('install-box', isInPan && 'in-pan')}>
             {isInPan ? (
+              <>
               <div className="flex items-center justify-between gap-4">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 text-[14px] font-semibold text-[#5fd3a0]">
@@ -1075,8 +1096,9 @@ function GameDrawer({
                     已加入百度网盘
                   </div>
                   <div className="mt-1 break-all text-xs text-muted">
-                    {panPath ? `路径：${panPath}` : '已在目标网盘目录中'}
-                    {game.pan_size ? ` · 占用 ${bytes(game.pan_size)}` : ''}
+                    {folders.length
+                      ? `${folders.length} 项 · ${panSize ? `共 ${bytes(panSize)}` : measure.isPending ? '正在统计大小…' : '大小未知'}`
+                      : `${panPath ? `路径：${panPath}` : '已在目标网盘目录中'}${panSize ? ` · 占用 ${bytes(panSize)}` : ''}`}
                   </div>
                 </div>
                 <button
@@ -1089,6 +1111,15 @@ function GameDrawer({
                   退出网盘
                 </button>
               </div>
+              {folders.length > 0 && (
+                <PanFolders
+                  folders={folders}
+                  measuring={measure.isPending}
+                  error={measure.error}
+                  onRefresh={() => measure.mutate(true)}
+                />
+              )}
+              </>
             ) : isQueued ? (
               <div className="flex items-center justify-between gap-4">
                 <div className="min-w-0">
@@ -1443,6 +1474,50 @@ function GameDrawer({
         </div>
       </aside>
     </>
+  );
+}
+
+function PanFolders({
+  folders,
+  measuring,
+  error,
+  onRefresh,
+}: {
+  folders: PanFolder[];
+  measuring: boolean;
+  error: unknown;
+  onRefresh: () => void;
+}) {
+  const scannedAt = folders.map(f => f.scanned_at).filter(Boolean).sort()[0];
+  return (
+    <div className="mt-3 border-t border-[#5fd3a0]/20 pt-2.5 text-xs">
+      <div className="mb-1.5 flex items-center justify-between text-muted">
+        <span>网盘文件夹{scannedAt && !measuring ? ` · 统计于 ${dateTime(scannedAt)}` : ''}</span>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 hover:text-white disabled:opacity-50"
+          onClick={onRefresh}
+          disabled={measuring}
+          title="重新统计文件夹大小"
+        >
+          <RefreshCw size={11} className={cx(measuring && 'animate-spin')} />
+          {measuring ? '统计中' : '重新统计'}
+        </button>
+      </div>
+      <div className="space-y-1">
+        {folders.map(f => (
+          <div key={f.path} className="flex items-center gap-1.5" title={f.path}>
+            {f.isdir === false ? <File size={13} className="shrink-0 text-muted" /> : <Folder size={13} className="shrink-0 text-[#4d8bff]" />}
+            <span className="min-w-0 truncate font-mono text-ink">{f.name}</span>
+            {f.isdir && f.files != null && <span className="num shrink-0 text-muted">{f.files} 个文件</span>}
+            <span className="num ml-auto shrink-0 text-ink">
+              {f.size != null ? bytes(f.size) : f.isdir == null ? '网盘里没找到' : measuring ? '统计中…' : '—'}
+            </span>
+          </div>
+        ))}
+      </div>
+      <ErrorNote error={error} />
+    </div>
   );
 }
 

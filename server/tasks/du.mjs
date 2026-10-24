@@ -14,7 +14,7 @@ async function duTree(ctx, start, stats) {
   // 队列暂时为空但还有目录在读时，空闲 worker 要等它们产出子目录，而不是直接退出
   const worker = async () => {
     for (;;) {
-      await ctx.checkpoint();
+      await ctx?.checkpoint();
       const dir = queue.shift();
       if (dir === undefined) {
         if (inflight === 0) return;
@@ -30,7 +30,7 @@ async function duTree(ctx, start, stats) {
           else { files++; size += e.size; }
         }
         stats.scanned_dirs++;
-        ctx.progress({ stats });
+        ctx?.progress({ stats });
       } catch { fails++; }
       finally { inflight--; }
     }
@@ -77,6 +77,21 @@ defineJob('du', {
     return { path: root, dirs: dirs.length, skipped, ...stats };
   },
 });
+
+// 不走任务队列直接统计一个目录（游戏详情里按需统计），结果和用量扫描写同一张表；同一目录并发请求只扫一次
+const measuring = new Map();
+export function measureDir(path) {
+  if (measuring.has(path)) return measuring.get(path);
+  const p = duTree(null, path, { requests: 0, scanned_dirs: 0 })
+    .then((r) => {
+      exec(`INSERT OR REPLACE INTO du_results (path, parent, name, is_dir, size, files, dirs, fails, scanned_at)
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)`, path, parentOf(path), path.slice(path.lastIndexOf('/') + 1), r.size, r.files, r.dirs, r.fails, nowIso());
+      return r;
+    })
+    .finally(() => measuring.delete(path));
+  measuring.set(path, p);
+  return p;
+}
 
 export function duChildren(dir) {
   return all('SELECT * FROM du_results WHERE parent = ? ORDER BY size DESC', dir);
