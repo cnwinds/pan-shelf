@@ -10,6 +10,7 @@ import { initCatalog } from './catalog.mjs';
 import { startCatalogSync } from './catalog-sync.mjs';
 import { startPanInventorySync } from './pan-inventory.mjs';
 import { startReviewSync } from './reviews.mjs';
+import { repickMultiFormat } from './linkpick.mjs';
 import routes from './api.mjs';
 import './tasks/crawl.mjs';
 import './tasks/transfer.mjs';
@@ -22,6 +23,8 @@ import './tasks/remove.mjs';
 const migrated = migrateLegacy();
 if (migrated) console.log(`已导入旧版数据：帖子 ${migrated.posts}，链接 ${migrated.links}，用量记录 ${migrated.du}`);
 initCatalog();
+const repicked = repickMultiFormat();
+if (repicked) console.log(`改为每种格式各收一个版本：${repicked} 条原先自动跳过的链接改回「可入盘」`);
 const interrupted = recoverOnBoot();
 if (interrupted) console.log(`上次有 ${interrupted} 个任务未完成，已标记为「已中断」，可在任务页重新运行`);
 

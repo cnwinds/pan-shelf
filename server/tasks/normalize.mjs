@@ -1,7 +1,9 @@
 // 目录规整：把目标目录整理成 ^[A-Z]{4}\d{4,6}$ 的标准 serial 目录。
 //   预览（normalize_plan）：只读，推导每个非标准条目的目标 serial，列出改名 / 合并 / 判重删除计划
 //   执行（normalize_exec）：仅执行用户勾选的目标；执行时重新读取实时目录，删源目录前必须验证已空
-import { one, exec } from '../db.mjs';
+import { one, all, exec } from '../db.mjs';
+import { FORMAT_DIR, FORMAT_LABEL, isFormatDir } from '../linkpick.mjs';
+import { linkFormat } from '../layout.mjs';
 import { defineJob } from '../jobs.mjs';
 import { getSource } from '../sources.mjs';
 import * as bd from '../baidu.mjs';
@@ -40,6 +42,25 @@ async function derive(entry, root) {
   return { reason: '目录名和内部文件都推导不出 serial', kids };
 }
 
+// 转存目录第一层的名字 → 转存它的链接的格式（转存时记下了分享里的顶层名字）
+function savedFormats(sourceId) {
+  const out = new Map();
+  for (const l of all(`SELECT surl, format, remark, saved_names FROM links WHERE source_id = ? AND status IN ('saved', 'exists') AND saved_names IS NOT NULL`, sourceId)) {
+    const f = linkFormat(l);
+    if (!FORMAT_DIR[f]) continue;
+    try { for (const n of JSON.parse(l.saved_names)) out.set(n, f); } catch {}
+  }
+  return out;
+}
+
+// 这个编号的游戏转存过哪些格式
+function formatsOfSerial(sourceId, serial) {
+  const rows = all(`SELECT l.format, l.remark FROM links l JOIN posts p ON p.source_id = l.source_id AND p.post_id = l.post_id
+                    WHERE l.source_id = ? AND l.status IN ('saved', 'exists')
+                      AND (UPPER(p.serial) = ? OR ',' || UPPER(COALESCE(p.share_serials, '')) || ',' LIKE ?)`, sourceId, serial, `%,${serial},%`);
+  return new Set(rows.map(linkFormat).filter(f => FORMAT_DIR[f]));
+}
+
 const destOf = (ctx) => {
   if (ctx.job.params.dest_dir) return ctx.job.params.dest_dir;
   const src = getSource(ctx.job.source_id);
@@ -59,12 +80,15 @@ defineJob('normalize_plan', {
     ctx.log(`${root}：共 ${list.length} 项，标准 ${standard}，待分析 ${pending.length}`);
 
     const derived = [], anomalies = [];
+    const formatOf = savedFormats(ctx.job.source_id);
     for (let i = 0; i < pending.length; i++) {
       await ctx.checkpoint();
       const e = pending[i];
       ctx.progress({ phase: 'analyze', done: i, total: pending.length, current: e.name });
       const d = await derive(e, root);
-      if (d.target) derived.push({ ...e, ...d });
+      // 知道是哪条链接转存来的，就并进游戏目录下的格式子目录
+      const fmt = formatOf.get(e.name);
+      if (d.target) derived.push({ ...e, ...d, target: fmt ? `${d.target}/${FORMAT_DIR[fmt]}` : d.target });
       else anomalies.push({ name: e.name, isdir: e.isdir, reason: d.reason });
       await ctx.sleep(250);
     }
@@ -78,9 +102,11 @@ defineJob('normalize_plan', {
     for (const [target, sources] of byTarget) {
       await ctx.checkpoint();
       ctx.progress({ phase: 'plan', done: gi++, total: byTarget.size, current: target });
-      const targetExists = existing.has(target);
+      const nested = target.includes('/');
+      const targetList = nested ? await bd.listDir(root + '/' + target) : null;
+      const targetExists = nested ? targetList !== null : existing.has(target);
       let targetNames = new Set();
-      if (targetExists) targetNames = new Set(((await bd.listDir(root + '/' + target)) || []).map(k => k.name.toLowerCase()));
+      if (targetExists) targetNames = new Set((targetList || (await bd.listDir(root + '/' + target)) || []).map(k => k.name.toLowerCase()));
       const steps = [];
       sources.forEach((s, idx) => {
         if (!targetExists && idx === 0 && s.isdir) {
@@ -103,6 +129,32 @@ defineJob('normalize_plan', {
       groups.push({ target, target_exists: targetExists, steps });
     }
 
+    // 已是标准编号、但还没按格式分子目录的游戏：转存记录能确定只有一种格式的，整个挪进那个格式子目录
+    const standardDirs = list.filter(e => e.isdir && STD_RE.test(e.name));
+    for (let i = 0; i < standardDirs.length; i++) {
+      await ctx.checkpoint();
+      const e = standardDirs[i];
+      ctx.progress({ phase: 'formats', done: i, total: standardDirs.length, current: e.name });
+      const kids = await bd.listDir(root + '/' + e.name);
+      await ctx.sleep(250);
+      const loose = (kids || []).filter(k => !(k.isdir && isFormatDir(k.name)));
+      if (!kids || !loose.length) continue;
+      // 没有转存记录的（网盘里原有的）不动，盘游当作一种未标注格式
+      const fmts = formatsOfSerial(ctx.job.source_id, e.name);
+      if (!fmts.size) continue;
+      if (fmts.size > 1) {
+        anomalies.push({ name: e.name, isdir: true, reason: `转存过 ${[...fmts].map(f => FORMAT_LABEL[f]).join('、')} 多种格式混在一起，分不出哪些文件是哪种，请手动放进 @exfat / @folder / @other` });
+        continue;
+      }
+      const fmt = [...fmts][0];
+      const fmtDir = kids.find(k => k.isdir && k.name.toLowerCase() === FORMAT_DIR[fmt]);
+      if (fmtDir) {
+        anomalies.push({ name: e.name, isdir: true, reason: `已有 ${FORMAT_DIR[fmt]}，外面还有 ${loose.length} 项，请手动确认` });
+        continue;
+      }
+      groups.push({ target: `${e.name}/${FORMAT_DIR[fmt]}`, target_exists: false, steps: [{ op: 'into_format', from: e.name, format: fmt, move: loose.map(k => k.name) }] });
+    }
+
     exec(`UPDATE normalize_plans SET status = 'superseded' WHERE dest_dir = ? AND status = 'ready'`, root);
     const plan = { dest_dir: root, total: list.length, standard, groups, anomalies };
     const r = exec(`INSERT INTO normalize_plans (source_id, dest_dir, status, plan, created_at) VALUES (?, ?, 'ready', ?, ?)`,
@@ -116,6 +168,23 @@ defineJob('normalize_plan', {
   },
   onFail(job, e) { notify('error', 'error', '规整预览失败', e.message); },
 });
+
+// 把游戏编号目录里散放的东西（不含已有的格式子目录）挪进格式子目录；执行时重新列目录，只挪还在的
+async function intoFormat(ctx, root, step, tDir, opDelay) {
+  const gameDir = root + '/' + step.from;
+  const kids = await bd.listDir(gameDir);
+  if (!kids) return { op: 'into_format', from: step.from, ok: false, error: '读取失败' };
+  if (!(await bd.mkdir(tDir, ctx.signal))) return { op: 'into_format', from: step.from, ok: false, error: '建目录失败' };
+  let moved = 0, fails = 0;
+  for (const k of kids) {
+    await ctx.checkpoint();
+    if (k.isdir && isFormatDir(k.name)) continue;
+    if (await bd.mv(`${gameDir}/${k.name}`, `${tDir}/${k.name}`, ctx.signal)) moved++; else fails++;
+    await opDelay();
+  }
+  ctx.log(fails ? 'warn' : 'info', `${step.from}：${moved} 项移入 ${tDir.slice(root.length + 1)}${fails ? `，${fails} 项失败` : ''}`);
+  return { op: 'into_format', from: step.from, moved, fails, ok: !fails };
+}
 
 defineJob('normalize_exec', {
   lane: 'pan',
@@ -142,8 +211,17 @@ defineJob('normalize_exec', {
         ctx.progress({ phase: 'exec', done: gi, total: chosen.length, current: g.target, counts });
         const tDir = root + '/' + g.target;
         const ops = [];
+        const into = g.steps.find(s => s.op === 'into_format');
+        if (into) {
+          const r = await intoFormat(ctx, root, into, tDir, opDelay);
+          results.push({ target: g.target, ops: [r], ok: r.ok });
+          r.ok ? counts.ok++ : counts.partial++;
+          continue;
+        }
         let live = await bd.listDir(tDir);
         let sources = g.steps.map(s => s.from);
+        // 格式子目录要先有游戏编号目录
+        if (!live && g.target.includes('/')) await bd.mkdir(tDir.slice(0, tDir.lastIndexOf('/')), ctx.signal);
         // 目标不存在：第一个源目录直接改名
         if (!live) {
           const first = g.steps.find(s => s.op === 'rename');

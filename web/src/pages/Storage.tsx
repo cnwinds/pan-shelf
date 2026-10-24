@@ -254,6 +254,7 @@ function PlanView({ plan, source, busy }: { plan: NormalizePlan; source: Source;
       if (s.op === 'move_file') move++;
       if (s.op === 'delete_dup') del++;
       if (s.op === 'merge') { move += s.move?.length || 0; del += s.dup?.length || 0; }
+      if (s.op === 'into_format') move += s.move?.length || 0;
     }));
     return { rename, move, del };
   }, [groups, checked]);
@@ -324,6 +325,7 @@ function PlanView({ plan, source, busy }: { plan: NormalizePlan; source: Source;
                             {s.op === 'move_file' && <>把文件 <b className="font-medium">{s.from}</b> 移入 {g.target}</>}
                             {s.op === 'delete_dup' && <>删除 <b className="font-medium">{s.from}</b>（{g.target} 里已有同名文件）</>}
                             {s.op === 'merge' && <>把 <b className="font-medium">{s.from}</b> 的内容并入：移入 {s.move?.length || 0} 项{s.dup?.length ? `，${s.dup.length} 个同名文件判重删除` : ''}，清空后删除源目录</>}
+                            {s.op === 'into_format' && <>按格式分目录：把 <b className="font-medium">{s.from}</b> 里的 {s.move?.length || 0} 项移入 {g.target}</>}
                             {s.by && <span className="ml-1.5 text-xs text-muted">（依据{s.by}推导）</span>}
                             {s.op === 'merge' && !!s.dup?.length && <span className="block truncate text-xs text-muted">重复：{s.dup.join('、')}</span>}
                           </span>

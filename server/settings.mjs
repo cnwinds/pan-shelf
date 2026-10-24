@@ -28,7 +28,7 @@ export const DEFAULTS = {
     quota_check_every: 5,         // 每转存 N 条重新查一次配额
     max_per_run: 0,               // 0 = 不限
     follow_crawl: true,           // 采集进行中时，转存任务等待新链接而不是直接结束
-    pick_one: true,               // 一个帖子多条链接时只收录一个版本（exFAT 优先），其余自动跳过
+    pick_one: true,               // 一个帖子多条链接时每种格式（exFAT / 文件夹 / 未标注）只收录版本最高的一个，其余自动跳过
     // 百度转存只能整份分享一起存，所以排除项是「存完再删」：名称命中的文件/目录整个删掉
     exclude_enabled: true,
     exclude_pattern: '(^|[^a-z])f?pkg([^a-z]|$)',

@@ -191,6 +191,9 @@ if (!linkCols.has('saved_names')) db.exec('ALTER TABLE links ADD COLUMN saved_na
 if (!linkCols.has('files_at')) db.exec('ALTER TABLE links ADD COLUMN files_at TEXT');
 // 盘游标记过不能玩、你确认「仍然加入」的链接，转存时不再拦
 if (!linkCols.has('allow_bad')) db.exec('ALTER TABLE links ADD COLUMN allow_bad INTEGER NOT NULL DEFAULT 0');
+// 盘游评价时装的是哪种格式（exfat / folder），旧评价为空
+const reviewCols = new Set(all('PRAGMA table_info(reviews)').map(c => c.name));
+if (!reviewCols.has('format')) db.exec('ALTER TABLE reviews ADD COLUMN format TEXT');
 const postCols = new Set(all('PRAGMA table_info(posts)').map(c => c.name));
 if (!postCols.has('serial')) db.exec('ALTER TABLE posts ADD COLUMN serial TEXT');
 // 分享里文件名上的编号（站点写的编号有时和实际内容不同），逗号分隔，删除游戏时按需查询并缓存

@@ -4,6 +4,7 @@ import { all, one, exec, tx } from './db.mjs';
 import * as bd from './baidu.mjs';
 import { bus } from './bus.mjs';
 import { nowIso } from './util.mjs';
+import { linkFormat } from './layout.mjs';
 
 // 盘游也按这个位置写，改了要两边一起改
 export const REVIEW_DIR = '/盘游/评价';
@@ -40,11 +41,12 @@ export function syncReviews() {
         exec('DELETE FROM reviews WHERE device_id = ?', deviceId);
         for (const r of doc.reviews) {
           if (!r?.fingerprint) continue;
-          exec(`INSERT OR REPLACE INTO reviews (fingerprint, device_id, device_name, title_id, name, playable, note, firmware, at, removed, parts)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          exec(`INSERT OR REPLACE INTO reviews (fingerprint, device_id, device_name, title_id, name, playable, note, firmware, at, removed, parts, format)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             String(r.fingerprint), deviceId, deviceName, String(r.title_id || '').toUpperCase() || null, r.name || null,
             r.playable === false ? 0 : 1, r.note || null, r.firmware || null, Number(r.at) || 0, r.removed ? 1 : 0,
-            JSON.stringify(Array.isArray(r.parts) ? r.parts.filter(p => p?.md5).map(p => ({ md5: String(p.md5), size: Number(p.size) || 0, name: p.name || '' })) : []));
+            JSON.stringify(Array.isArray(r.parts) ? r.parts.filter(p => p?.md5).map(p => ({ md5: String(p.md5), size: Number(p.size) || 0, name: p.name || '' })) : []),
+            typeof r.format === 'string' && r.format ? r.format : null);
         }
       });
       seen.set(f.name, f.fs_id);
@@ -98,6 +100,7 @@ function getIndex() {
     playable: !!r.playable,
     note: r.note || '',
     firmware: r.firmware || '',
+    format: r.format || null,
     at: r.at,
     device: r.device_name || '',
     parts: (() => { try { return JSON.parse(r.parts); } catch { return []; } })(),
@@ -185,14 +188,16 @@ export function reviewsOfSerials(serials) {
   return out.sort((a, b) => b.at - a.at);
 }
 
-const brief = (r) => ({ fingerprint: r.fingerprint, playable: r.playable, note: r.note, firmware: r.firmware, at: r.at, device: r.device, name: r.name });
+// format：盘游评价时装的格式；旧评价没记，分享对得上时按那条链接的格式补
+const brief = (r, link) => ({ fingerprint: r.fingerprint, playable: r.playable, note: r.note, firmware: r.firmware, at: r.at, device: r.device, name: r.name,
+  format: r.format || (link ? linkFormat(link) : null) });
 
 // 游戏库格子上的一句：exact 表示这个游戏的某条分享就是评过的那份，否则只是同一个编号评过
 export function gameReviewBrief(post, serial, links, matches) {
   const ordered = [...links].sort((a, b) => Number(['saved', 'exists'].includes(b.status)) - Number(['saved', 'exists'].includes(a.status)));
   for (const l of ordered) {
     const m = matches.get(l.surl);
-    if (m?.length) return { ...brief(m[0]), exact: true };
+    if (m?.length) return { ...brief(m[0], l), exact: true };
   }
   const t = reviewsOfSerials(serialsOf(post, serial));
   return t.length ? { ...brief(t[0]), exact: false } : null;
@@ -205,7 +210,7 @@ export function gameReviews(post, serial, links) {
   const items = [];
   for (const l of usable) {
     for (const r of matches.get(l.surl) || []) {
-      if (!items.some(x => x.fingerprint === r.fingerprint)) items.push({ ...brief(r), match: 'this', surl: l.surl });
+      if (!items.some(x => x.fingerprint === r.fingerprint)) items.push({ ...brief(r, l), match: 'this', surl: l.surl });
     }
   }
   const checked = usable.every(l => l.files_at);

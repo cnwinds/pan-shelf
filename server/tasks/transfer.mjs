@@ -6,6 +6,7 @@ import { getSettings } from '../settings.mjs';
 import { notify } from '../notify.mjs';
 import { nowIso, fmtBytes } from '../util.mjs';
 import { excludeRe, pruneExcluded } from './prune.mjs';
+import { linkDestDir, flattenWrapper } from '../layout.mjs';
 import { ensureShareFiles, badReviewOfLink, hasMatchableBad, freshReviews } from '../reviews.mjs';
 
 // 盘游标记过不能玩的那份资源（分享里有它主游戏的全部分卷）就不转存；你点过「仍然加入」的不拦
@@ -108,7 +109,9 @@ defineJob('transfer', {
         continue;
       }
 
-      const r = await bd.transferOne(link.surl, link.pwd, src.dest_dir, { timeoutSec: getSettings().transfer.timeout_sec, signal: ctx.signal });
+      const dest = linkDestDir(src, link);
+      if (dest !== src.dest_dir) await bd.mkdir(dest.slice(0, dest.lastIndexOf('/')), ctx.signal);
+      const r = await bd.transferOne(link.surl, link.pwd, dest, { timeoutSec: getSettings().transfer.timeout_sec, signal: ctx.signal });
       if (r.status === 'err_quota') {
         exec(`UPDATE links SET last_error = ?, attempts = attempts + 1 WHERE surl = ?`, r.detail, link.surl);
         tried.delete(link.surl);
@@ -119,7 +122,11 @@ defineJob('transfer', {
         continue;
       }
       exec(`UPDATE links SET status = ?, attempts = attempts + 1, last_error = ?, dest_dir = ?, transferred_at = ?, saved_names = COALESCE(?, saved_names) WHERE surl = ?`,
-        r.status, r.detail || null, src.dest_dir, nowIso(), r.names?.length ? JSON.stringify(r.names) : null, link.surl);
+        r.status, r.detail || null, dest, nowIso(), r.names?.length ? JSON.stringify(r.names) : null, link.surl);
+      if (r.status === 'saved' && dest !== src.dest_dir) {
+        try { await flattenWrapper(dest, r.names, { signal: ctx.signal, log: (m) => ctx.log(m) }); }
+        catch (e) { if (ctx.signal.aborted) throw e; ctx.log('warn', `去掉外包目录失败：${e.message}`); }
+      }
       done++; sinceQuota++;
       if (r.status === 'saved') counts.saved++;
       else if (r.status === 'exists') counts.exists++;

@@ -11,7 +11,8 @@ import { toast, webhook } from './notify.mjs';
 import { duChildren, measureDir } from './tasks/du.mjs';
 import { resolveRemoval, resetLinks } from './tasks/remove.mjs';
 import { serialsFromName } from './tasks/normalize.mjs';
-import { pickLinks } from './linkpick.mjs';
+import { pickLinks, isFormatDir, formatOfDir } from './linkpick.mjs';
+import { linkFormat, formatStates } from './layout.mjs';
 import { enrichGameRow, ensureCoverFile, getCoverFile, detectImageMime, refreshStoreMeta, lookupCatalogBySerial } from './catalog.mjs';
 import { bus } from './bus.mjs';
 import { changeDestDir } from './destdir.mjs';
@@ -164,7 +165,18 @@ async function findPanItems(src, row, serial, links) {
   const found = (entries || [])
     .filter(e => savedNames.has(e.name) || [...serialsFromName(e.name)].some(s => serials.has(String(s).toUpperCase())))
     .map(e => ({ path: e.path || join(e.name), name: e.name, isdir: e.isdir, size: e.size }));
-  return found.length ? found : [...savedNames].map(name => ({ path: join(name), name, isdir: null, size: null }));
+  if (!found.length) return [...savedNames].map(name => ({ path: join(name), name, isdir: null, size: null }));
+  // 游戏目录里按格式分了子目录的，一种格式列一项，方便看各占多大、单独退出
+  const out = [];
+  for (const it of found) {
+    let kids = null;
+    if (it.isdir) try { kids = await listPanDirCached(it.path); } catch {}
+    if (!kids?.some(k => k.isdir && isFormatDir(k.name))) { out.push(it); continue; }
+    for (const k of kids) {
+      out.push({ path: k.path || `${it.path}/${k.name}`, name: `${it.name}/${k.name}`, isdir: k.isdir, size: k.isdir ? null : k.size, format: k.isdir ? formatOfDir(k.name) : null });
+    }
+  }
+  return out;
 }
 
 // 目录大小取用量扫描的结果，没扫过的为 null，由 /api/games/pan-size 按需统计；
@@ -190,7 +202,7 @@ async function gameDetail(source_id, row, enriched) {
   const pan_folders = pan_state === 'in_pan' && src?.dest_dir ? panFolders(await findPanItems(src, row, enriched.serial, links), links) : [];
   const pan_paths = pan_folders.map(f => f.path);
   const reviews = gameReviews(row, enriched.serial, links);
-  return { ...enriched, pan_state, pan_size, pan_paths, pan_folders, links, reviews: reviews.items, reviews_checked: reviews.checked };
+  return { ...enriched, pan_state, pan_size, pan_paths, pan_folders, links, formats: formatStates(links), reviews: reviews.items, reviews_checked: reviews.checked };
 }
 
 function computePanState(post, links, hasPanDir = false) {
@@ -245,7 +257,7 @@ function listGames(q) {
       const enriched = enrichGameRow(r, storeMetaMap);
       const pan_size = matchPanSize(r, enriched.serial, inv);
       const pan_state = computePanState(r, links, pan_size !== null || inPanInventory(r, enriched.serial, inv));
-      return { ...enriched, pan_state, pan_size, links, review: gameReviewBrief(r, enriched.serial, links, matches) };
+      return { ...enriched, pan_state, pan_size, links, formats: formatStates(links), review: gameReviewBrief(r, enriched.serial, links, matches) };
     }),
   };
 }
@@ -269,16 +281,18 @@ function selectedSurls(body, { withSkipped = false } = {}) {
   return [];
 }
 
-// 加入网盘时会转存的链接：有「可入盘」的用它们，否则（还没入盘时）从没失效的链接里按优选规则挑
-function linksToAdd(source_id, id) {
-  const available = all(`SELECT surl FROM links WHERE source_id = ? AND post_id = ? AND status = 'available'`, source_id, id);
+// 加入网盘时会转存的链接：有「可入盘」的用它们，否则（还没入盘时）从没失效的链接里按优选规则挑。
+// formats 给了时只要这些格式（exfat / folder / unknown），不给是全部格式
+function linksToAdd(source_id, id, formats = null) {
+  const want = (l) => !formats || formats.includes(linkFormat(l));
+  const available = all(`SELECT surl, format, remark FROM links WHERE source_id = ? AND post_id = ? AND status = 'available'`, source_id, id).filter(want);
   if (available.length) return available.map(l => l.surl);
-  const existing = all(`SELECT surl, pwd, remark, status FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid`, source_id, id);
-  if (!existing.length || existing.some(l => ['saved', 'exists', 'pending'].includes(l.status))) return [];
-  const candidates = existing.filter(l => l.status !== 'invalid');
+  const existing = all(`SELECT surl, pwd, remark, format, status FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid`, source_id, id);
+  const busy = new Set(existing.filter(l => ['saved', 'exists', 'pending'].includes(l.status)).map(linkFormat));
+  const candidates = existing.filter(l => l.status !== 'invalid' && !busy.has(linkFormat(l)));
   if (!candidates.length) return [];
   const picked = candidates.some(l => l.remark === null) ? candidates.map(l => ({ ...l, chosen: true })) : pickLinks(candidates);
-  return picked.filter(l => l.chosen).map(l => l.surl);
+  return picked.filter(l => l.chosen && want(l)).map(l => l.surl);
 }
 
 // 编号对得上某条「不能玩」评价的游戏，先列出要转存的分享核对 md5（就几次请求），这样能当场提醒
@@ -301,8 +315,9 @@ async function addToPan(body) {
   await checkSharesBeforeAdd(source_id, ids);
   let n = 0, games = 0;
   const blocked = [];
+  const formats = Array.isArray(body.formats) && body.formats.length ? body.formats : null;
   tx(() => ids.forEach(id => {
-    const surls = linksToAdd(source_id, id);
+    const surls = linksToAdd(source_id, id, formats);
     const bads = new Map(surls.map(s => [s, badReviewOfLink(s)]).filter(([, r]) => r));
     // 有别的版本能转就只转它们；全是标记过不能玩的，不加并告诉界面，你确认后带 force 再来
     const use = body.force || bads.size === surls.length ? surls : surls.filter(s => !bads.has(s));
@@ -522,21 +537,22 @@ export default async function routes(app) {
       .send(buf);
   });
   app.post('/api/games/remove-preview', async (req) => {
-    const { source_id, post_ids = [] } = req.body || {};
+    const { source_id, post_ids = [], formats = null } = req.body || {};
     if (!getSource(source_id)) throw bad(400, '需要指定来源');
     if (!post_ids.length) throw bad(400, '请选择要删除的游戏');
     if (post_ids.length > 200) throw bad(400, '一次最多删除 200 个游戏');
-    return { games: await resolveRemoval(source_id, post_ids) };
+    return { games: await resolveRemoval(source_id, post_ids, { formats: formats?.length ? formats : null }) };
   });
   app.post('/api/games/remove', async (req) => {
-    const { source_id, post_ids = [], reset_only = false } = req.body || {};
+    const { source_id, post_ids = [], reset_only = false, formats = null } = req.body || {};
     if (!getSource(source_id)) throw bad(400, '需要指定来源');
     if (!post_ids.length) throw bad(400, '请选择要删除的游戏');
+    const only = formats?.length ? formats : null;
     if (reset_only) {
-      post_ids.forEach(pid => resetLinks(source_id, String(pid)));
+      post_ids.forEach(pid => resetLinks(source_id, String(pid), only));
       return { ok: true, reset: post_ids.length };
     }
-    return { job: jobs.enqueue('remove', { source_id, params: { post_ids: post_ids.map(String) }, dedupe: false }) };
+    return { job: jobs.enqueue('remove', { source_id, params: { post_ids: post_ids.map(String), ...(only ? { formats: only } : {}) }, dedupe: false }) };
   });
 
   // ---------- 任务 ----------

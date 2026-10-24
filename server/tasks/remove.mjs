@@ -7,13 +7,14 @@ import * as bd from '../baidu.mjs';
 import { getSettings } from '../settings.mjs';
 import { notify } from '../notify.mjs';
 import { fmtBytes, nowIso } from '../util.mjs';
-import { pickLinks } from '../linkpick.mjs';
+import { pickLinks, FORMAT_DIR, isFormatDir } from '../linkpick.mjs';
+import { linkFormat } from '../layout.mjs';
 import { requireLogin } from './transfer.mjs';
 import { serialsFromName } from './normalize.mjs';
 import { treeSize } from './prune.mjs';
 
 // 返回 [{ post_id, title, serial, targets: [{ path, name, isdir, size }], problem }]
-export async function resolveRemoval(sourceId, postIds, { sizes = true } = {}) {
+export async function resolveRemoval(sourceId, postIds, { sizes = true, formats = null } = {}) {
   const src = getSource(sourceId);
   if (!src) throw new Error('来源不存在');
   const top = await bd.listDir(src.dest_dir) || [];
@@ -50,10 +51,32 @@ export async function resolveRemoval(sourceId, postIds, { sizes = true } = {}) {
       if (e.isdir && sizes) size = one('SELECT size FROM du_results WHERE path = ?', e.path)?.size ?? await treeSize(e.path);
       g.targets.push({ path: e.path, name: e.name, isdir: e.isdir, size: e.isdir && !sizes ? null : size });
     }
+    if (formats?.length && g.targets.length) await narrowToFormats(g, formats, sizes);
     if (!g.targets.length && !g.problem && unsure) g.problem = `网盘里没有 ${[...wanted].join(' / ')}，分享也已读不到、无法确认实际编号，请手动在网盘删除`;
     else if (!g.targets.length && !g.problem) { g.missing = true; g.problem = `网盘 ${src.dest_dir} 里没有 ${[...wanted].join(' / ')}，确认后只把记录改回「未入盘」`; }
   }
   return out;
+}
+
+// 只退出其中几种格式：删游戏目录下对应的格式子目录；删完游戏目录里没别的东西了，游戏目录也删掉
+async function narrowToFormats(g, formats, sizes) {
+  const wanted = new Set(formats.map(f => FORMAT_DIR[f]).filter(Boolean));
+  const out = [];
+  for (const t of g.targets) {
+    const kids = t.isdir ? await bd.listDir(t.path) : null;
+    if (!kids?.some(k => k.isdir && isFormatDir(k.name))) {
+      g.problem = `「${t.name}」没有按格式分子目录，只能整个退出网盘`;
+      continue;
+    }
+    const hit = kids.filter(k => k.isdir && wanted.has(k.name.toLowerCase()));
+    if (hit.length && hit.length === kids.length) { out.push(t); continue; }
+    for (const k of hit) {
+      const size = sizes ? one('SELECT size FROM du_results WHERE path = ?', k.path)?.size ?? await treeSize(k.path) : null;
+      out.push({ path: k.path, name: `${t.name}/${k.name}`, isdir: true, size });
+    }
+  }
+  g.targets = out;
+  g.formats = formats;
 }
 
 // 读已转存链接的分享文件列表，从文件名里取编号；分享全都读不了时返回 null（下次再试）
@@ -70,12 +93,13 @@ async function shareSerials(sourceId, postId) {
   return readable ? found : null;
 }
 
-// 删除后：链接恢复为可入盘，多版本里没选中的保持跳过
-export function resetLinks(sourceId, postId) {
-  const links = all(`SELECT surl, pwd, remark, status FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid`, sourceId, postId);
+// 删除后：链接恢复为可入盘，多版本里没选中的保持跳过。formats 给了时只动这些格式的链接
+export function resetLinks(sourceId, postId, formats = null) {
+  const links = all(`SELECT surl, pwd, remark, format, status FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid`, sourceId, postId);
   const picked = links.some(l => l.remark === null) ? links.map(l => ({ ...l, chosen: true })) : pickLinks(links);
   tx(() => {
     for (const l of picked) {
+      if (formats && !formats.includes(linkFormat(l))) continue;
       if (!['saved', 'exists', 'pending'].includes(l.status) && !(l.chosen && l.status.startsWith('err_'))) continue;
       if (l.chosen) exec(`UPDATE links SET status = 'available', last_error = ?, dest_dir = NULL, transferred_at = NULL, saved_names = NULL, allow_bad = 0 WHERE surl = ?`, `已从网盘删除（${nowIso().slice(0, 10)}）`, l.surl);
       else exec(`UPDATE links SET status = 'skipped', last_error = ? WHERE surl = ?`, '自动跳过：' + (l.reason || '未选中的版本'), l.surl);
@@ -86,12 +110,13 @@ export function resetLinks(sourceId, postId) {
 defineJob('remove', {
   lane: 'pan',
   label: '从网盘删除',
-  // params: { post_ids: string[] }
+  // params: { post_ids: string[], formats?: string[] 只退出这些格式 }
   async run(ctx) {
     const src = getSource(ctx.job.source_id);
     if (!src) throw new Error('来源不存在');
     await requireLogin(ctx);
-    const games = await resolveRemoval(src.id, ctx.job.params.post_ids || [], { sizes: false });
+    const formats = ctx.job.params.formats?.length ? ctx.job.params.formats : null;
+    const games = await resolveRemoval(src.id, ctx.job.params.post_ids || [], { sizes: false, formats });
     const sizeOf = (t) => one('SELECT size FROM du_results WHERE path = ?', t.path)?.size ?? t.size ?? 0;
     let removed = 0, failed = 0, bytes = 0, trashed = 0, trashedBytes = 0;
     const done = [];
@@ -119,7 +144,7 @@ defineJob('remove', {
         await ctx.sleep(getSettings().normalize.op_interval_ms);
       }
       // 网盘里本来就找不到的，也把记录恢复为可入盘
-      if (ok || g.missing) { resetLinks(src.id, g.post_id); removed++; done.push(g.title); }
+      if (ok || g.missing) { resetLinks(src.id, g.post_id, formats); removed++; done.push(g.title); }
     }
     ctx.progress({ phase: 'done', done: games.length, total: games.length, current: null });
     ctx.log(`完成：${removed} 个游戏已移出网盘${bytes ? `，释放约 ${fmtBytes(bytes)}` : ''}${trashed ? `；${trashed} 项${trashedBytes ? `（约 ${fmtBytes(trashedBytes)}）` : ''}在 ${bd.TRASH_DIR}，请在百度网盘 App 里删除这个目录释放空间` : ''}${failed ? `，${failed} 项删除失败` : ''}`);

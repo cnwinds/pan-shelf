@@ -23,7 +23,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-react';
-import { api, type BlockedAdd, type Game, type GameReview, type Job, type PanFolder, type PanState, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
+import { api, type BlockedAdd, type FormatState, type Game, type GameFormat, type GameReview, type Job, type PanFolder, type PanState, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
 import { useAccount, useSetup, useSources } from '../lib/hooks';
 import { Dropdown } from '../components/Dropdown';
 import { Chip, Empty, ErrorNote, Modal, cx, linkStatus } from '../components/ui';
@@ -66,10 +66,23 @@ const REGION_NAMES: Record<string, string> = {
 
 const FORMAT_LABELS: Record<string, { label: string; cls: string }> = {
   exfat: { label: 'exFAT', cls: 'bg-ok-soft text-ok' },
+  ffpkg: { label: 'ffpkg', cls: 'bg-line-2 text-ink-2' },
+  ffpfs: { label: 'ffpfs', cls: 'bg-line-2 text-ink-2' },
   folder: { label: '文件夹', cls: 'bg-line-2 text-ink-2' },
   pkg: { label: 'PKG', cls: 'bg-bad-soft text-bad' },
   unknown: { label: '未标注', cls: 'bg-line-2 text-muted' },
 };
+const FORMAT_ORDER: GameFormat[] = ['exfat', 'folder', 'unknown'];
+const FORMAT_STATE_LABELS: Record<FormatState['state'], { label: string; cls: string }> = {
+  in_pan: { label: '已在网盘', cls: 'bg-ok-soft text-ok' },
+  queued: { label: '排队转存', cls: 'bg-line-2 text-[#7aa8ff]' },
+  available: { label: '可加入', cls: 'bg-line-2 text-ink-2' },
+  bad: { label: '盘游说不能玩', cls: 'bg-bad-soft text-bad' },
+  failed: { label: '转存失败', cls: 'bg-bad-soft text-bad' },
+  none: { label: '没有可用链接', cls: 'bg-line-2 text-muted' },
+};
+const formatText = (f: FormatState) =>
+  `${FORMAT_LABELS[f.format].label}${f.version ? ` ${f.version}` : ''}${f.firmware ? ` · 固件 ${f.firmware}.xx+` : ''}`;
 
 // 每页大约这么多个，实际取「列数 × 行数」，保证每页最后一行是满的
 const TARGET_PAGE_SIZE = 120;
@@ -138,7 +151,9 @@ export function reviewWhere(r: Review): string {
   return `${r.device || '盘游'} 上 ${new Date(r.at * 1000).toLocaleDateString('zh-CN')}`;
 }
 export function reviewVerdict(r: Review): string {
-  return `${r.playable ? '能正常玩' : '不能玩'}${r.note ? `：${r.note}` : ''}${r.firmware ? `（固件 ${r.firmware}）` : ''}`;
+  const fmt = r.format ? FORMAT_LABELS[r.format]?.label || r.format : '';
+  const extra = [fmt && `${fmt} 版`, r.firmware && `固件 ${r.firmware}`].filter(Boolean).join('，');
+  return `${r.playable ? '能正常玩' : '不能玩'}${r.note ? `：${r.note}` : ''}${extra ? `（${extra}）` : ''}`;
 }
 
 function TileReview({ r }: { r: ReviewBrief }) {
@@ -173,6 +188,8 @@ export function Games() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activePostId, setActivePostId] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string[] | null>(null);
+  const [removeFormats, setRemoveFormats] = useState<GameFormat[] | undefined>(undefined);
+  const [addingBatch, setAddingBatch] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const qc = useQueryClient();
@@ -298,6 +315,14 @@ export function Games() {
 
   const selectedIds = [...selected];
   const activeGameFromList = rows.find(r => r.post_id === activePostId) || null;
+  // 所选游戏里还能加入网盘的各种格式；不止一种时先问加哪些
+  const batchFormats = FORMAT_ORDER.filter(f =>
+    rows.some(r => selected.has(r.post_id) && r.formats?.some(x => x.format === f && x.state === 'available'))
+  );
+  const openRemove = (ids: string[], formats?: GameFormat[]) => {
+    setRemoveFormats(formats);
+    setRemoving(ids);
+  };
   const isExtraView = EXTRA_FILTERS.some(f => f.id === view);
 
   return (
@@ -438,7 +463,9 @@ export function Games() {
           <button
             className="btn btn-sm btn-primary"
             disabled={!selectedIds.length || action.isPending}
-            onClick={() => action.mutate({ action: 'add', post_ids: selectedIds })}
+            onClick={() =>
+              batchFormats.length > 1 ? setAddingBatch(true) : action.mutate({ action: 'add', post_ids: selectedIds })
+            }
           >
             <CloudDownload size={13} />
             加入网盘
@@ -446,7 +473,7 @@ export function Games() {
           <button
             className="btn btn-sm btn-danger"
             disabled={!selectedIds.length || action.isPending}
-            onClick={() => setRemoving(selectedIds)}
+            onClick={() => openRemove(selectedIds)}
           >
             <Trash2 size={13} />
             退出网盘（释放空间）
@@ -505,7 +532,7 @@ export function Games() {
               onSelect={() => toggleSelect(g.post_id)}
               onOpen={() => setActivePostId(g.post_id)}
               onQuickAdd={() => action.mutate({ action: 'add', post_ids: [g.post_id] })}
-              onQuickRemove={() => setRemoving([g.post_id])}
+              onQuickRemove={() => openRemove([g.post_id])}
               onQuickCancel={() => action.mutate({ action: 'cancel_transfer', post_ids: [g.post_id] })}
               busy={action.isPending}
             />
@@ -533,9 +560,9 @@ export function Games() {
           initialGame={activeGameFromList}
           quotaFree={acc?.quota?.free}
           onClose={() => setActivePostId(null)}
-          onAdd={force => action.mutate({ action: 'add', post_ids: [activePostId], force })}
+          onAdd={(force, formats) => action.mutate({ action: 'add', post_ids: [activePostId], force, formats })}
           onCancelTransfer={() => action.mutate({ action: 'cancel_transfer', post_ids: [activePostId] })}
-          onRemove={() => setRemoving([activePostId])}
+          onRemove={formats => openRemove([activePostId], formats)}
           onRecrawl={() => action.mutate({ action: 'recrawl', post_ids: [activePostId] })}
           onLinkAction={(act, surl, force) => action.mutate({ action: act, surls: [surl], force })}
           busy={action.isPending}
@@ -547,12 +574,26 @@ export function Games() {
         <RemoveDialog
           sourceId={sourceId}
           postIds={removing}
+          formats={removeFormats}
           onClose={() => setRemoving(null)}
           onDone={msg => {
             setRemoving(null);
             setSelected(new Set());
             refreshAll();
             setNotice(msg);
+          }}
+        />
+      )}
+
+      {addingBatch && (
+        <AddFormatsDialog
+          count={selectedIds.length}
+          formats={batchFormats}
+          busy={action.isPending}
+          onClose={() => setAddingBatch(false)}
+          onConfirm={formats => {
+            action.mutate({ action: 'add', post_ids: selectedIds, formats });
+            setAddingBatch(false);
           }}
         />
       )}
@@ -600,6 +641,82 @@ function BlockedDialog({ items, busy, onClose, onForce }: { items: BlockedAdd[];
         </div>
       </div>
     </Modal>
+  );
+}
+
+function AddFormatsDialog({ count, formats, busy, onClose, onConfirm }: {
+  count: number; formats: GameFormat[]; busy: boolean; onClose: () => void; onConfirm: (formats: GameFormat[]) => void;
+}) {
+  const [picked, setPicked] = useState<Set<GameFormat>>(new Set(formats));
+  const toggle = (f: GameFormat) => setPicked(prev => {
+    const next = new Set(prev);
+    if (next.has(f)) next.delete(f); else next.add(f);
+    return next;
+  });
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`把 ${count} 个游戏加入网盘`}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>取消</button>
+          <button className="btn btn-primary" disabled={busy || !picked.size} onClick={() => onConfirm(FORMAT_ORDER.filter(f => picked.has(f)))}>
+            <CloudDownload size={14} />
+            加入网盘
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3 text-[13px]">
+        <p className="text-muted">
+          这些游戏有不止一种格式。每种格式转存到游戏编号目录下各自的子目录（@exfat、@folder、@other），盘游安装时可以选装哪种。只要其中一部分格式的，取消勾选其他的。
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {formats.map(f => (
+            <button key={f} type="button" className={cx('chip-toggle', picked.has(f) && 'on')} aria-pressed={picked.has(f)} onClick={() => toggle(f)}>
+              {picked.has(f) && <Check size={12} strokeWidth={3} />}
+              {FORMAT_LABELS[f].label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// 每种格式一行：状态、版本和固件要求；能加入的可以勾选，已在网盘的可以单独退出
+function FormatRows({ formats, picked, onToggle, onRemove, busy }: {
+  formats: FormatState[];
+  picked: Set<GameFormat>;
+  onToggle: (f: GameFormat) => void;
+  onRemove: (f: GameFormat) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="mt-3 divide-y divide-line rounded-lg border border-line bg-[#131a27]">
+      {formats.map(f => {
+        const st = FORMAT_STATE_LABELS[f.state];
+        const pickable = f.state === 'available';
+        return (
+          <div key={f.format} className="flex items-center gap-2 px-3 py-2 text-xs">
+            {pickable ? (
+              <input type="checkbox" checked={picked.has(f.format)} onChange={() => onToggle(f.format)} aria-label={`加入 ${FORMAT_LABELS[f.format].label}`} />
+            ) : (
+              <span className="inline-block w-[13px]" />
+            )}
+            <span className="min-w-0 truncate text-ink">{formatText(f)}</span>
+            <Chip cls={st.cls}>{st.label}</Chip>
+            {f.state === 'in_pan' && (
+              <button type="button" className="btn btn-sm ml-auto h-6! px-2! text-[11px]!" disabled={busy} onClick={() => onRemove(f.format)}>
+                <Trash2 size={10} />
+                只退出这种格式
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -885,9 +1002,9 @@ function GameDrawer({
   initialGame: Game | null;
   quotaFree?: number;
   onClose: () => void;
-  onAdd: (force?: boolean) => void;
+  onAdd: (force?: boolean, formats?: GameFormat[]) => void;
   onCancelTransfer: () => void;
-  onRemove: () => void;
+  onRemove: (formats?: GameFormat[]) => void;
   onRecrawl: () => void;
   onLinkAction: (action: string, surl: string, force?: boolean) => void;
   busy: boolean;
@@ -923,6 +1040,21 @@ function GameDrawer({
   }, [game?.post_id, game?.custom_name]);
 
   useEffect(() => setIntroOpen(false), [postId]);
+
+  // 要加入网盘的格式，默认能加的全选
+  const formats = game?.formats || [];
+  const availableKey = formats.filter(f => f.state === 'available').map(f => f.format).join(',');
+  const [pickedFormats, setPickedFormats] = useState<Set<GameFormat>>(new Set());
+  useEffect(() => {
+    setPickedFormats(new Set(availableKey ? (availableKey.split(',') as GameFormat[]) : []));
+  }, [postId, availableKey]);
+  const toggleFormat = (f: GameFormat) => setPickedFormats(prev => {
+    const next = new Set(prev);
+    if (next.has(f)) next.delete(f); else next.add(f);
+    return next;
+  });
+  const multiFormat = formats.length > 1;
+  const addPicked = (force?: boolean) => onAdd(force, multiFormat ? FORMAT_ORDER.filter(f => pickedFormats.has(f)) : undefined);
 
   // 盘游评过同编号的游戏、但还没核对分享内容时，打开详情就列一遍分享看是不是同一份资源
   const needsCheck = !!detail.data?.game.reviews?.some(r => r.match === 'unknown');
@@ -1105,12 +1237,25 @@ function GameDrawer({
                   type="button"
                   className="cta danger shrink-0"
                   disabled={busy}
-                  onClick={onRemove}
+                  onClick={() => onRemove()}
                 >
                   <Trash2 size={15} />
                   退出网盘
                 </button>
               </div>
+              {multiFormat && (
+                <>
+                  <FormatRows formats={formats} picked={pickedFormats} onToggle={toggleFormat} onRemove={f => onRemove([f])} busy={busy} />
+                  {!!availableKey && (
+                    <div className="mt-2 flex justify-end">
+                      <button type="button" className="btn btn-sm" disabled={busy || !pickedFormats.size} onClick={() => addPicked()}>
+                        <CloudDownload size={13} />
+                        加入勾选的格式
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
               {folders.length > 0 && (
                 <PanFolders
                   folders={folders}
@@ -1151,7 +1296,7 @@ function GameDrawer({
                     {reviewWhere(knownBad)}标记{reviewVerdict(knownBad)}。分享里的文件和那次一模一样，自动转存会跳过它
                   </div>
                 </div>
-                <button type="button" className="cta ghost shrink-0" disabled={busy} onClick={() => onAdd(true)}>
+                <button type="button" className="cta ghost shrink-0" disabled={busy} onClick={() => addPicked(true)}>
                   仍然加入
                 </button>
               </div>
@@ -1163,7 +1308,7 @@ function GameDrawer({
                   </div>
                   <div className="mt-1 text-xs text-muted">
                     {game.links.length > 0
-                      ? `共 ${game.links.length} 条百度盘分享${primaryFormat ? ` · 优选 ${primaryFormat}` : ''}`
+                      ? `共 ${game.links.length} 条百度盘分享${multiFormat ? ` · ${formats.length} 种格式，勾选要加入的` : primaryFormat ? ` · ${primaryFormat}` : ''}`
                       : '当前暂无可用分享链接，可尝试重新采集'}
                     {quotaFree != null ? ` · 剩余空间 ${bytes(quotaFree)}` : ''}
                   </div>
@@ -1171,13 +1316,16 @@ function GameDrawer({
                 <button
                   type="button"
                   className="cta shrink-0"
-                  disabled={busy || game.links.length === 0}
-                  onClick={() => onAdd()}
+                  disabled={busy || game.links.length === 0 || (multiFormat && !!availableKey && !pickedFormats.size)}
+                  onClick={() => addPicked()}
                 >
                   <CloudDownload size={16} />
                   加入网盘
                 </button>
               </div>
+            )}
+            {!isInPan && !isQueued && multiFormat && (
+              <FormatRows formats={formats} picked={pickedFormats} onToggle={toggleFormat} onRemove={f => onRemove([f])} busy={busy} />
             )}
           </section>
 
@@ -1564,20 +1712,24 @@ function ReviewSection({ reviews, checking, checkErrors }: { reviews: GameReview
 export function RemoveDialog({
   sourceId,
   postIds,
+  formats,
   onClose,
   onDone,
 }: {
   sourceId: string;
   postIds: string[];
+  /** 只退出这些格式（删游戏目录下对应的格式子目录），不给是整个游戏 */
+  formats?: GameFormat[];
   onClose: () => void;
   onDone: (msg: string) => void;
 }) {
   const preview = useQuery({
-    queryKey: ['remove-preview', sourceId, postIds],
+    queryKey: ['remove-preview', sourceId, postIds, formats],
     queryFn: () =>
       api.post<{ games: RemovalPreview[] }>('/games/remove-preview', {
         source_id: sourceId,
         post_ids: postIds,
+        formats,
       }),
     gcTime: 0,
     staleTime: 0,
@@ -1599,6 +1751,7 @@ export function RemoveDialog({
         source_id: sourceId,
         post_ids: resetOnly ? postIds : [...found, ...missing].map(g => g.post_id),
         reset_only: resetOnly,
+        formats,
       }),
     onSuccess: (r, resetOnly) => {
       if (resetOnly) {
@@ -1617,7 +1770,7 @@ export function RemoveDialog({
     <Modal
       open
       onClose={onClose}
-      title="退出网盘（释放网盘空间）"
+      title={formats?.length ? `退出网盘：只退出 ${formats.map(f => FORMAT_LABELS[f].label).join('、')}` : '退出网盘（释放网盘空间）'}
       width="max-w-2xl"
       footer={
         <>

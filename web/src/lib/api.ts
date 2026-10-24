@@ -86,6 +86,11 @@ export interface LoginState {
 }
 export type PanState = 'in_pan' | 'queued' | 'available' | 'bad' | 'pending_detail' | 'failed' | 'no_link';
 
+/** 网盘里每种格式放在游戏编号目录下的 @exfat / @folder / @other，盘游安装时按它让你选格式 */
+export type GameFormat = 'exfat' | 'folder' | 'unknown';
+/** 一种格式的状态：in_pan 已在网盘，queued 排队转存，available 可加入，bad 盘游说不能玩，failed 转存失败，none 没有能用的链接 */
+export interface FormatState { format: GameFormat; state: 'in_pan' | 'queued' | 'available' | 'bad' | 'failed' | 'none'; surl: string; version: string | null; firmware: string | null }
+
 export interface GameLink { surl: string; pwd: string; status: string; attempts: number; last_error: string | null; dest_dir: string | null; transferred_at: string | null; remark: string | null; format: 'exfat' | 'folder' | 'pkg' | 'unknown' | null; files_at?: string | null; allow_bad?: number }
 
 /** 盘游里的一条评价。at 是秒级时间戳，device 是评价所在设备（「PS5」「电脑 XXX」） */
@@ -97,6 +102,8 @@ export interface Review {
   at: number;
   device: string;
   name: string | null;
+  /** 盘游评价时装的格式（exfat / folder …）；旧评价没记时按对得上的那条链接补，都没有为空 */
+  format?: string | null;
 }
 /** exact：这个游戏的某条分享就是评过的那份；否则只是同一个编号评过 */
 export interface ReviewBrief extends Review { exact: boolean }
@@ -160,6 +167,7 @@ export interface Game {
   pan_size?: number | null;
   pan_paths?: string[];
   pan_folders?: PanFolder[];
+  formats?: FormatState[];
   review?: ReviewBrief | null;
   reviews?: GameReview[];
   reviews_checked?: boolean;
@@ -173,6 +181,8 @@ export interface PanFolder {
   size: number | null;
   files: number | null;
   scanned_at: string | null;
+  /** 游戏目录按格式分了子目录时，这一项是哪种格式 */
+  format?: GameFormat | null;
 }
 
 export interface Settings {
@@ -184,7 +194,7 @@ export interface Settings {
   server: { port: number };
 }
 
-export interface PlanStep { op: 'rename' | 'merge' | 'move_file' | 'delete_dup'; from: string; by?: string; move?: string[]; dup?: string[] }
+export interface PlanStep { op: 'rename' | 'merge' | 'move_file' | 'delete_dup' | 'into_format'; from: string; by?: string; move?: string[]; dup?: string[]; format?: GameFormat }
 export interface PlanGroup { target: string; target_exists: boolean; steps: PlanStep[] }
 export interface NormalizePlan {
   id: number; source_id: string; dest_dir: string; status: string; created_at: string; executed_at: string | null;
