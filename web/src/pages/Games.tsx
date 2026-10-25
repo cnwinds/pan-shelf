@@ -23,7 +23,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-react';
-import { api, type BlockedAdd, type FormatState, type Game, type GameFormat, type GameReview, type Job, type PanFolder, type PanState, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
+import { api, type BlockedAdd, type FormatState, type Game, type GameFormat, type GameLink, type GameReview, type Job, type PanFolder, type PanState, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
 import { useAccount, useSetup, useSources } from '../lib/hooks';
 import { Dropdown } from '../components/Dropdown';
 import { Chip, Empty, ErrorNote, Modal, cx, linkStatus } from '../components/ui';
@@ -1330,7 +1330,7 @@ function GameDrawer({
           </section>
 
           {!!game.reviews?.length && (
-            <ReviewSection reviews={game.reviews} checking={checkReviews.isPending} checkErrors={checkReviews.data?.errors || []} />
+            <ReviewSection reviews={game.reviews} links={game.links} checking={checkReviews.isPending} checkErrors={checkReviews.data?.errors || []} />
           )}
 
           {/* 游戏介绍与规格 */}
@@ -1675,26 +1675,37 @@ const MATCH_LABEL: Record<GameReview['match'], string> = {
   unknown: '同一个游戏',
 };
 
-function ReviewSection({ reviews, checking, checkErrors }: { reviews: GameReview[]; checking: boolean; checkErrors: string[] }) {
+function reviewTag(r: GameReview, links: GameLink[]): { label: string; title: string } {
+  if (r.match !== 'this') return { label: r.match === 'other' ? '另一份' : '同游戏', title: MATCH_LABEL[r.match] };
+  const fmt = links.find(l => l.surl === r.surl)?.format;
+  const label = fmt && fmt !== 'unknown' ? FORMAT_LABELS[fmt]?.label : null;
+  return { label: label || '这份', title: `${MATCH_LABEL.this}${label ? `（${label}）` : ''}` };
+}
+
+function ReviewSection({ reviews, links, checking, checkErrors }: { reviews: GameReview[]; links: GameLink[]; checking: boolean; checkErrors: string[] }) {
   const unknown = reviews.some(r => r.match === 'unknown');
   return (
     <section className="intro">
       <h3 className="intro-title">盘游评价</h3>
-      <div className="space-y-2">
-        {reviews.map(r => (
-          <div key={r.fingerprint} className={cx('review-item', r.playable ? 'ok' : 'bad', r.match === 'other' && 'other')}>
-            <div className="flex items-center gap-2">
-              <strong>{r.playable ? '能正常玩' : '不能玩'}</strong>
-              <span className="review-match">{MATCH_LABEL[r.match]}</span>
-              <span className="ml-auto text-[11px] text-muted">{reviewWhere(r)}</span>
+      <div className="space-y-1.5">
+        {reviews.map(r => {
+          const tag = reviewTag(r, links);
+          const detail = [r.note, r.firmware && `固件 ${r.firmware}`, r.match !== 'this' && r.name && `评的是「${r.name}」`].filter(Boolean).join(' · ');
+          return (
+            <div
+              key={r.fingerprint}
+              className={cx('review-item flex items-center gap-2', r.playable ? 'ok' : 'bad', r.match === 'other' && 'other')}
+              title={[`${r.playable ? '能正常玩' : '不能玩'}（${tag.title}）`, detail, reviewWhere(r)].filter(Boolean).join('\n')}
+            >
+              <strong className="shrink-0">{r.playable ? '能玩' : '不能玩'}</strong>
+              <span className="review-match shrink-0">{tag.label}</span>
+              <span className="min-w-0 flex-1 truncate text-xs text-[#c3ccdb]">{detail}</span>
+              <span className="shrink-0 text-[11px] text-muted">
+                {r.device || '盘游'} {new Date(r.at * 1000).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
+              </span>
             </div>
-            {(r.note || r.firmware || (r.match !== 'this' && r.name)) && (
-              <div className="mt-1 text-xs text-[#c3ccdb]">
-                {[r.note, r.firmware && `固件 ${r.firmware}`, r.match !== 'this' && r.name && `评的是「${r.name}」`].filter(Boolean).join(' · ')}
-              </div>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
       {unknown && (
         <p className="intro-empty">
