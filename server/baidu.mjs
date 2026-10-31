@@ -161,9 +161,9 @@ const SHARE_ERR = {
 };
 const INVALID_ERRNO = [105, -7, 117, -21, 115];
 
-// 递归列出分享里的全部文件。返回 { files: [{ rel, name, size, md5 }] } 或 { error }
-// md5 和转存后网盘里看到的一样（盘游的评价按它认同一份资源）
-export async function listShare(surl, pwd, { delayMs = 400 } = {}) {
+// 递归列出分享里的全部文件。返回 { files: [{ rel, name, size, md5 }], dirs: [rel] } 或 { error }
+// md5 和转存后网盘里看到的一样（盘游的评价按它认同一份资源）；maxDepth 限制往下列几层（根目录算第 1 层）
+export async function listShare(surl, pwd, { delayMs = 400, maxDepth = Infinity } = {}) {
   const short = surl.replace(/^1/, '');
   try {
     const v = await (await fetch(`https://pan.baidu.com/share/verify?surl=${short}&t=${Date.now()}&channel=chunlei&web=1&clienttype=0`, {
@@ -174,23 +174,26 @@ export async function listShare(surl, pwd, { delayMs = 400 } = {}) {
     if (v.errno !== 0) return { error: SHARE_ERR[v.errno] || `验证失败 errno=${v.errno}` };
     const headers = { 'user-agent': UA, referer: `https://pan.baidu.com/s/${surl}`, cookie: `BDCLND=${v.randsk}` };
     const files = [];
-    const queue = [null];
+    const dirs = [];
+    const queue = [{ dir: null, depth: 1 }];
     while (queue.length) {
-      const dir = queue.shift();
+      const { dir, depth } = queue.shift();
       for (let page = 1; ; page++) {
         const q = dir === null ? 'root=1' : `root=0&dir=${encodeURIComponent(dir)}`;
         const j = await (await fetch(`https://pan.baidu.com/share/list?web=1&app_id=${XPAN_APP_ID}&shorturl=${short}&${q}&page=${page}&num=100&order=name&desc=0&showempty=0`,
           { headers, signal: AbortSignal.timeout(20000) })).json();
         if (j.errno !== 0) return { error: SHARE_ERR[j.errno] || `列目录失败 errno=${j.errno}` };
         for (const e of j.list || []) {
-          if (+e.isdir) queue.push(e.path);
-          else files.push({ rel: e.path, name: e.server_filename, size: +e.size, md5: e.md5 || null });
+          if (+e.isdir) {
+            dirs.push(e.path);
+            if (depth < maxDepth) queue.push({ dir: e.path, depth: depth + 1 });
+          } else files.push({ rel: e.path, name: e.server_filename, size: +e.size, md5: e.md5 || null });
         }
         await sleep(delayMs);
         if ((j.list || []).length < 100) break;
       }
     }
-    return { files };
+    return { files, dirs };
   } catch (e) {
     return { error: String(e.message || e).slice(0, 120) };
   }

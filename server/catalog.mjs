@@ -311,15 +311,6 @@ export function matchCatalogForPost(serial, title) {
     const relaxed = normEnglish(candidate);
     if (relaxed && byNormName.has(relaxed)) return byNormName.get(relaxed);
   }
-  // 帖子标题常带商店名里没有的版本副标题（「Slay the Princess: The Pristine Cut」商店里叫「Slay The Princess」），
-  // 从后往前去掉冒号、破折号后面的部分再比；去掉的部分带续作标记（第几章、2、II）就是另一个游戏，
-  // 剩下的名字太短容易撞上别的游戏，都不比
-  const parts = (enTitle || '').split(/\s*[:：]\s*|\s+[-–—]\s+/);
-  for (let n = parts.length - 1; n >= 1; n--) {
-    if (/\d|\b(chapter|part|episode|season|vol|volume|[ivx]{2,})\b/i.test(parts[n])) break;
-    const base = normEnglish(parts.slice(0, n).join(' '));
-    if (base.length >= 8 && byNormName.has(base)) return byNormName.get(base);
-  }
   return null;
 }
 
