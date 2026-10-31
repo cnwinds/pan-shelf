@@ -673,7 +673,7 @@
    ========================================================= */
 .shelf {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(164px, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 2rem 1.35rem;
 }
 .skel {
@@ -1110,41 +1110,17 @@
   font-size: 0.66rem;
   line-height: 1.35;
 }
-/* 盘游评价：实心是评过的就是这份资源，虚线是只对得上游戏编号 */
+/* 盘游说不能玩的游戏，封面画红色描边；实线是评过的就是这份资源，虚线是只对得上游戏编号 */
 .tile-review {
   position: absolute;
-  top: 0.55rem;
-  left: 0.55rem;
+  inset: 0;
   z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2rem;
-  padding: 0.2rem 0.45rem 0.2rem 0.35rem;
-  border-radius: 5px;
-  backdrop-filter: blur(8px);
-  font-size: 0.72rem;
-  font-weight: 600;
-  line-height: 1.2;
-  white-space: nowrap;
-  color: #fff;
-}
-.tile-review.ok {
-  background: rgba(38, 150, 104, 0.88);
-  border: 1px solid rgba(95, 211, 160, 0.7);
-}
-.tile-review.bad {
-  background: rgba(196, 72, 58, 0.9);
-  border: 1px solid rgba(255, 138, 122, 0.7);
+  border: 3px solid var(--danger);
+  border-radius: inherit;
+  pointer-events: none;
 }
 .tile-review.loose {
-  background: rgba(13, 18, 28, 0.82);
   border-style: dashed;
-}
-.tile-review.loose.ok {
-  color: var(--mint);
-}
-.tile-review.loose.bad {
-  color: var(--danger);
 }
 
 .review-item {

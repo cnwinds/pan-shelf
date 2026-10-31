@@ -156,16 +156,15 @@ export function reviewVerdict(r: Review): string {
   return `${r.playable ? '能正常玩' : '不能玩'}${r.note ? `：${r.note}` : ''}${extra ? `（${extra}）` : ''}`;
 }
 
-function TileReview({ r }: { r: ReviewBrief }) {
-  const title = r.exact
+function tileReviewTitle(r: ReviewBrief): string {
+  return r.exact
     ? `盘游里评过这份资源：${reviewWhere(r)}标记${reviewVerdict(r)}`
     : `盘游评过这个游戏（${reviewWhere(r)}标记${reviewVerdict(r)}），但不一定是这里的这份资源`;
-  return (
-    <span className={cx('tile-review', r.playable ? 'ok' : 'bad', !r.exact && 'loose')} title={title}>
-      {r.playable ? <Check size={11} strokeWidth={3} /> : <X size={11} strokeWidth={3} />}
-      {r.playable ? '能玩' : '有问题'}
-    </span>
-  );
+}
+
+function TileReview({ r }: { r: ReviewBrief }) {
+  if (r.playable) return null;
+  return <span className={cx('tile-review', !r.exact && 'loose')} aria-hidden="true" />;
 }
 
 export function Games() {
@@ -880,7 +879,11 @@ function GameTile({
         }
       }}
     >
-      <div className="art" style={{ '--hue': hue } as React.CSSProperties}>
+      <div
+        className="art"
+        style={{ '--hue': hue } as React.CSSProperties}
+        title={game.review && !batchMode ? tileReviewTitle(game.review) : undefined}
+      >
         <div className="art-id">
           <span>{prefix}</span>
           <strong>{digits}</strong>
