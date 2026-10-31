@@ -99,7 +99,18 @@ function buildPanInventory(source_id) {
     const src = source_id ? getSource(source_id) : listSources()[0];
     if (!src?.dest_dir) return { bySerial, byConcept, present };
     present = panInventorySets(src.id);
-    const rows = all('SELECT name, size FROM du_results WHERE parent = ?', src.dest_dir);
+    // 游戏目录按格式分了子目录时，详情里统计的是各格式子目录；比整个目录的结果新就用子目录合计
+    const root = src.dest_dir.replace(/\/+$/, '');
+    const tops = new Map(all('SELECT name, size, scanned_at FROM du_results WHERE parent IN (?, ?)', src.dest_dir, root).map(r => [r.name, r]));
+    for (const r of all('SELECT parent, size, scanned_at FROM du_results WHERE parent LIKE ?', root + '/%')) {
+      const name = r.parent.slice(root.length + 1);
+      if (name.includes('/')) continue;
+      const kids = tops.get(name)?.kids || { size: 0, scanned_at: '' };
+      kids.size += Number(r.size) || 0;
+      if (r.scanned_at > kids.scanned_at) kids.scanned_at = r.scanned_at;
+      tops.set(name, { ...(tops.get(name) || { name, size: null, scanned_at: '' }), kids });
+    }
+    const rows = [...tops.values()].map(r => r.kids && (r.size == null || r.kids.scanned_at > r.scanned_at) ? { name: r.name, size: r.kids.size } : r);
     for (const r of rows) {
       const serials = serialsFromName(r.name);
       if (serials.size === 1) {
@@ -205,6 +216,38 @@ async function gameDetail(source_id, row, enriched) {
   return { ...enriched, pan_state, pan_size, pan_paths, pan_folders, links, formats: formatStates(links), reviews: reviews.items, reviews_checked: reviews.checked };
 }
 
+// 游戏库里已入盘却还不知道大小的游戏，后台逐个统计网盘目录大小；每统计完一个推送 pan_inventory 让页面刷新。
+// 统计不出来的（目录名里没有编号等）隔一段时间才再试
+const SIZE_RETRY_MS = 30 * 60_000;
+const sizeQueue = new Map();
+const sizeTried = new Map();
+let sizeRunning = false;
+function queuePanSize(source_id, post_id) {
+  const key = `${source_id}/${post_id}`;
+  if (sizeQueue.has(key) || Date.now() - (sizeTried.get(key) || 0) < SIZE_RETRY_MS) return;
+  sizeTried.set(key, Date.now());
+  sizeQueue.set(key, { source_id, post_id });
+  if (!sizeRunning) drainPanSize();
+}
+async function drainPanSize() {
+  sizeRunning = true;
+  try {
+    for (const [key, { source_id, post_id }] of sizeQueue) {
+      sizeQueue.delete(key);
+      try {
+        const src = getSource(source_id);
+        const row = one('SELECT * FROM posts WHERE source_id = ? AND post_id = ?', source_id, post_id);
+        if (!src?.dest_dir || !row) continue;
+        const links = all(DETAIL_LINK_SQL, source_id, post_id);
+        const folders = panFolders(await findPanItems(src, row, enrichGameRow(row).serial, links), links);
+        const todo = folders.filter(f => f.isdir && f.size == null);
+        for (const f of todo) await measureDir(f.path);
+        if (todo.length) bus.emit('pan_inventory', { source_id, sized: post_id });
+      } catch (e) { console.warn(`统计游戏 ${post_id} 的网盘大小失败：${e.message}`); }
+    }
+  } finally { sizeRunning = false; }
+}
+
 function computePanState(post, links, hasPanDir = false) {
   if (hasPanDir || links.some(l => l.status === 'saved' || l.status === 'exists')) return 'in_pan';
   if (links.some(l => l.status === 'pending')) return 'queued';
@@ -257,6 +300,7 @@ function listGames(q) {
       const enriched = enrichGameRow(r, storeMetaMap);
       const pan_size = matchPanSize(r, enriched.serial, inv);
       const pan_state = computePanState(r, links, pan_size !== null || inPanInventory(r, enriched.serial, inv));
+      if (pan_state === 'in_pan' && pan_size === null) queuePanSize(r.source_id, String(r.post_id));
       return { ...enriched, pan_state, pan_size, links, formats: formatStates(links), review: gameReviewBrief(r, enriched.serial, links, matches) };
     }),
   };
