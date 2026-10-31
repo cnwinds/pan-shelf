@@ -966,9 +966,11 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+/* 容量标签：绿底表示已经入盘 */
 .corner.done {
-  color: var(--mint);
-  border-color: rgba(95, 211, 160, 0.35);
+  background: var(--mint);
+  border-color: var(--mint);
+  color: #0d121c;
 }
 .corner.live {
   color: var(--signal-hi);

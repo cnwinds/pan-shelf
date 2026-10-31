@@ -905,7 +905,7 @@ function GameTile({
         )}
 
         {isInPan && (
-          <span className="corner done">
+          <span className="corner done" title="已入盘">
             {game.pan_size ? bytes(game.pan_size) : '已入盘'}
           </span>
         )}
