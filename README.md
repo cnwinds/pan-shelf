@@ -24,9 +24,21 @@ npm start
 
 ```bash
 docker compose up -d --build
+npm install --prefix web   # 挂载 web/dist 后需在宿主机能构建前端
+npm run build
+docker compose up -d       # 应用 compose 里的代码挂载（无需再 build 镜像）
 ```
 
 启动后打开 http://127.0.0.1:5175 。
+
+**Docker 日常更新**（改前端/后端代码时，不必重建镜像；项目根目录与 `web/` 下的 `.npmrc` 已指向 [npmmirror](https://npmmirror.com)）：
+
+```bash
+./scripts/update-docker.sh
+# 或：npm run update:docker
+```
+
+仅当 `package.json` 依赖变更时才需要 `docker compose up -d --build`。
 
 ## 首次设置
 

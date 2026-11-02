@@ -8,5 +8,8 @@ services:
       - "127.0.0.1:5175:5175"
     volumes:
       - ./data:/data
+      # 宿主机代码/构建产物挂载，日常 git pull 后跑 scripts/update-docker.sh 即可，无需 docker build
+      - ./web/dist:/app/web/dist:ro
+      - ./server:/app/server:ro
     environment:
       TZ: Asia/Shanghai
