@@ -116,6 +116,10 @@ export interface ReviewStatus {
   bad: number;
   devices: { id: string; name: string; count: number; bad: number }[];
 }
+export interface PanplayLibraryStatus {
+  publish: { path: string; running: boolean; at?: string; checked_at?: string; count?: number; error?: string | null };
+  links: { running: boolean; at: string | null; checked: number; dead: number; error: string | null; total: number; checked_total: number; dead_total: number };
+}
 export interface InPanBadGame { serial: string; path: string; size: number; post_id: string | null; title: string; review: Review }
 export interface BlockedAdd { post_id: string; title: string; review: Review }
 export interface Game {

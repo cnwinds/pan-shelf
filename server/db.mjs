@@ -191,6 +191,10 @@ if (!linkCols.has('saved_names')) db.exec('ALTER TABLE links ADD COLUMN saved_na
 if (!linkCols.has('files_at')) db.exec('ALTER TABLE links ADD COLUMN files_at TEXT');
 // 盘游标记过不能玩、你确认「仍然加入」的链接，转存时不再拦
 if (!linkCols.has('allow_bad')) db.exec('ALTER TABLE links ADD COLUMN allow_bad INTEGER NOT NULL DEFAULT 0');
+// 链接检查（link-check.mjs）：最近一次列分享的时间、还能不能用（1 / 0，没查过为空）、分享里文件的总大小
+if (!linkCols.has('checked_at')) db.exec('ALTER TABLE links ADD COLUMN checked_at TEXT');
+if (!linkCols.has('alive')) db.exec('ALTER TABLE links ADD COLUMN alive INTEGER');
+if (!linkCols.has('share_size')) db.exec('ALTER TABLE links ADD COLUMN share_size INTEGER');
 // 盘游评价时装的是哪种格式（exfat / folder），旧评价为空
 const reviewCols = new Set(all('PRAGMA table_info(reviews)').map(c => c.name));
 if (!reviewCols.has('format')) db.exec('ALTER TABLE reviews ADD COLUMN format TEXT');

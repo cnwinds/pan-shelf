@@ -148,6 +148,27 @@ export async function readSmallFile(fsId, { timeoutSec = 30 } = {}) {
   return r.text();
 }
 
+// 写一个小文件（几百 KB 以内），已有的覆盖，上级目录没有时网盘自己建。和盘游的 write_small_file 用同一个接口
+export async function writeSmallFile(path, text, { timeoutSec = 60 } = {}) {
+  const boundary = `----panshelf${Date.now()}`;
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+    Buffer.from(text),
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const r = await fetch(`https://d.pcs.baidu.com/rest/2.0/pcs/file?method=upload&app_id=${XPAN_APP_ID}&ondup=overwrite&path=${encodeURIComponent(path)}`, {
+    method: 'POST',
+    headers: { 'user-agent': 'pan.baidu.com', cookie: cookieHeader(), 'content-type': `multipart/form-data; boundary=${boundary}` },
+    body,
+    signal: AbortSignal.timeout(timeoutSec * 1000),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (r.ok && j.fs_id) return String(j.fs_id);
+  if (j.error_code === 110 || j.error_code === 111 || j.errno === -6) throw new Error('网盘登录已失效，请在「设置 → 网盘账号」里重新扫码登录');
+  throw new Error(`上传失败 HTTP ${r.status}${j.error_code ? ` error_code=${j.error_code}` : ''}${j.errno ? ` errno=${j.errno}` : ''}`);
+}
+
 // ---------- 分享内容（匿名，凭提取码） ----------
 const SHARE_ERR = {
   '-9': '提取码错误',
@@ -161,8 +182,9 @@ const SHARE_ERR = {
 };
 const INVALID_ERRNO = [105, -7, 117, -21, 115];
 
-// 递归列出分享里的全部文件。返回 { files: [{ rel, name, size, md5 }], dirs: [rel] } 或 { error }
+// 递归列出分享里的全部文件。返回 { files: [{ rel, name, size, md5 }], dirs: [rel] } 或 { error, invalid }
 // md5 和转存后网盘里看到的一样（盘游的评价按它认同一份资源）；maxDepth 限制往下列几层（根目录算第 1 层）
+// invalid 为 true 表示链接确定不能用了（失效、取消、提取码错），否则是限流、网络这类过一会儿再试的错
 export async function listShare(surl, pwd, { delayMs = 400, maxDepth = Infinity } = {}) {
   const short = surl.replace(/^1/, '');
   try {
@@ -171,7 +193,11 @@ export async function listShare(surl, pwd, { delayMs = 400, maxDepth = Infinity 
       headers: { 'user-agent': UA, referer: `https://pan.baidu.com/share/init?surl=${short}`, 'content-type': 'application/x-www-form-urlencoded' },
       body: `pwd=${pwd || ''}&vcode=&vcode_str=`,
     })).json();
-    if (v.errno !== 0) return { error: SHARE_ERR[v.errno] || `验证失败 errno=${v.errno}` };
+    if (v.errno !== 0) {
+      // 没带提取码时百度也可能回「提取码错误」，那说明不了链接失效
+      const badPwd = Boolean(pwd) && (v.errno === -9 || v.errno === -12);
+      return { error: SHARE_ERR[v.errno] || `验证失败 errno=${v.errno}`, invalid: INVALID_ERRNO.includes(v.errno) || badPwd };
+    }
     const headers = { 'user-agent': UA, referer: `https://pan.baidu.com/s/${surl}`, cookie: `BDCLND=${v.randsk}` };
     const files = [];
     const dirs = [];
@@ -182,7 +208,7 @@ export async function listShare(surl, pwd, { delayMs = 400, maxDepth = Infinity 
         const q = dir === null ? 'root=1' : `root=0&dir=${encodeURIComponent(dir)}`;
         const j = await (await fetch(`https://pan.baidu.com/share/list?web=1&app_id=${XPAN_APP_ID}&shorturl=${short}&${q}&page=${page}&num=100&order=name&desc=0&showempty=0`,
           { headers, signal: AbortSignal.timeout(20000) })).json();
-        if (j.errno !== 0) return { error: SHARE_ERR[j.errno] || `列目录失败 errno=${j.errno}` };
+        if (j.errno !== 0) return { error: SHARE_ERR[j.errno] || `列目录失败 errno=${j.errno}`, invalid: INVALID_ERRNO.includes(j.errno) };
         for (const e of j.list || []) {
           if (+e.isdir) {
             dirs.push(e.path);

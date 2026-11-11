@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Folder, File, ScanSearch, RefreshCw, FolderInput, Merge, Trash2, PencilLine, CircleCheck, CircleAlert, FolderTree } from 'lucide-react';
-import { api, type DuRow, type InPanBadGame, type NormalizePlan, type ReviewStatus, type Source } from '../lib/api';
+import { api, type DuRow, type InPanBadGame, type NormalizePlan, type PanplayLibraryStatus, type ReviewStatus, type Source } from '../lib/api';
 import { RemoveDialog } from './Games';
 import { useAccount, useOverview, useSources, useStartJob } from '../lib/hooks';
 import { JobCard } from '../components/JobCard';
@@ -57,6 +57,8 @@ function Usage() {
 
       {job && <JobCard job={job} />}
 
+      <PanplayLibraryPanel />
+
       <ReviewsPanel />
 
       <section className="panel overflow-hidden">
@@ -100,6 +102,59 @@ function Usage() {
         )}
       </section>
     </div>
+  );
+}
+
+// ---------- 盘游资源库 ----------
+function PanplayLibraryPanel() {
+  const qc = useQueryClient();
+  const status = useQuery({
+    queryKey: ['panplay-library'],
+    queryFn: () => api.get<PanplayLibraryStatus>('/panplay-library'),
+    refetchInterval: q => (q.state.data?.links.running || q.state.data?.publish.running ? 5000 : 60_000),
+  });
+  const publish = useMutation({
+    mutationFn: () => api.post<PanplayLibraryStatus>('/panplay-library/publish'),
+    onSuccess: s => qc.setQueryData(['panplay-library'], s),
+  });
+  const check = useMutation({
+    mutationFn: () => api.post<PanplayLibraryStatus>('/panplay-library/check-links'),
+    onSuccess: s => qc.setQueryData(['panplay-library'], s),
+  });
+  const s = status.data;
+  const p = s?.publish;
+  const l = s?.links;
+
+  return (
+    <section className="panel p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-[14px] font-medium">盘游资源库</div>
+          <div className="mt-1 text-[13px] text-muted">
+            {!p ? '正在读取…' : p.at
+              ? <>已发布 <span className="num text-ink">{p.count}</span> 个游戏到 <span className="font-mono">{p.path}</span>，更新于 {dateTime(p.at)}。盘游据此列出全部游戏，点安装时自己转存。</>
+              : <>还没发布。发布后盘游能直接看到这里的全部游戏，点安装时自己转存到网盘，不用先在这里加入网盘。</>}
+          </div>
+          {l && (
+            <div className="mt-1 text-[13px] text-muted">
+              链接检查：已查 <span className="num text-ink">{l.checked_total}</span> / {l.total} 条，失效 <span className="num text-bad">{l.dead_total}</span> 条
+              {l.running ? '，正在检查…' : l.at ? `，上次 ${dateTime(l.at)}` : ''}。每条链接 7 天复查一次。
+            </div>
+          )}
+          {p?.error && <div className="mt-1 text-xs text-warn">上次发布失败：{p.error}</div>}
+          {l?.error && <div className="mt-1 text-xs text-warn">链接检查中途停下：{l.error}，下一轮再继续</div>}
+        </div>
+        <div className="flex gap-2">
+          <button className="btn btn-sm" disabled={check.isPending || l?.running} onClick={() => check.mutate()}>
+            <ScanSearch size={12} />检查链接
+          </button>
+          <button className="btn btn-sm" disabled={publish.isPending || p?.running} onClick={() => publish.mutate()}>
+            <RefreshCw size={12} className={cx((publish.isPending || p?.running) && 'animate-spin')} />立即发布
+          </button>
+        </div>
+      </div>
+      <ErrorNote error={status.error || publish.error || check.error} />
+    </section>
   );
 }
 

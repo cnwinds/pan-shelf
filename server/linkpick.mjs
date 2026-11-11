@@ -25,7 +25,7 @@ export function classify(remark = '') {
   return { format, version, firmware, extra: format === 'unknown' && !version && EXTRA_RE.test(remark) };
 }
 
-const cmpVer = (a, b) => {
+export const cmpVer = (a, b) => {
   if (!a || !b) return (a ? 1 : 0) - (b ? 1 : 0);
   const x = a.split('.').map(Number), y = b.split('.').map(Number);
   for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);

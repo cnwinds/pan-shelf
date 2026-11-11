@@ -21,6 +21,8 @@ import {
   allReviews, hasMatchableBad, shareMatches, ensureShareFiles, badReviewOfLink, serialsOf, reviewsOfSerials,
   gameReviewBrief, gameReviews, badGamesInPan, reviewStatus, syncReviews, refreshReviewsIfStale,
 } from './reviews.mjs';
+import { libraryPublishStatus, publishLibrary } from './library-publish.mjs';
+import { linkCheckStatus, checkLinks } from './link-check.mjs';
 
 const bad = (code, msg) => Object.assign(new Error(msg), { statusCode: code });
 
@@ -508,6 +510,11 @@ export default async function routes(app) {
   // ---------- 盘游评价 ----------
   app.get('/api/reviews', async () => reviewStatus());
   app.post('/api/reviews/sync', async () => { await syncReviews(); return reviewStatus(); });
+  // ---------- 盘游资源库 ----------
+  const panplayLibrary = () => ({ publish: libraryPublishStatus(), links: linkCheckStatus() });
+  app.get('/api/panplay-library', async () => panplayLibrary());
+  app.post('/api/panplay-library/publish', async () => { await publishLibrary({ force: true }); return panplayLibrary(); });
+  app.post('/api/panplay-library/check-links', async () => { checkLinks(); return panplayLibrary(); });
   app.get('/api/reviews/in-pan-bad', async (req) => {
     const src = req.query.source_id ? getSource(req.query.source_id) : listSources()[0];
     if (!src) throw bad(400, '需要指定来源');
