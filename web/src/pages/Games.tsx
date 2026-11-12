@@ -1420,7 +1420,7 @@ function GameDrawer({
                 </div>
               )}
 
-              {(game.publisher || game.genres || game.release_date || game.screen_langs?.length) && (
+              {!!(game.publisher || game.genres || game.release_date || game.screen_langs?.length) && (
                 <dl className="specs">
                   {game.publisher && (
                     <div>

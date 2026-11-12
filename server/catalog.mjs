@@ -18,6 +18,15 @@ const CATALOG_PATHS = [
 
 const byTitleId = new Map();
 const byNormName = new Map();
+// conceptId → 资料库里的名字；名字 → 用这个名字的全部 conceptId（各区、PS4 / PS5 版各有各的）
+const nameByConcept = new Map();
+const conceptsByName = new Map();
+
+// 同名游戏的其他 conceptId。有的 PS5 版商店页是空的（下架了，或者只有 PS4 版那页写着 PS4 / PS5），借它们的资料
+function sameNameConcepts(conceptId) {
+  const key = nameByConcept.get(Number(conceptId));
+  return key ? [...(conceptsByName.get(key) || [])].filter(c => c !== Number(conceptId)) : [];
+}
 let catalogLoaded = false;
 let catalogSourcePath = '';
 
@@ -160,6 +169,8 @@ export function initCatalog() {
       const titles = raw.titles || raw.t || {};
       byTitleId.clear();
       byNormName.clear();
+      nameByConcept.clear();
+      conceptsByName.clear();
       for (const [tid, item] of Object.entries(titles)) {
         const id = shortTitleId(tid);
         if (!id || !item?.n) continue;
@@ -175,6 +186,12 @@ export function initCatalog() {
         byTitleId.set(id, entry);
         registerNameIndex(exactNorm(entry.name), entry);
         registerNameIndex(normEnglish(entry.name), entry);
+        const key = exactNorm(entry.name);
+        if (entry.conceptId && key) {
+          if (!nameByConcept.has(entry.conceptId)) nameByConcept.set(entry.conceptId, key);
+          if (!conceptsByName.has(key)) conceptsByName.set(key, new Set());
+          conceptsByName.get(key).add(entry.conceptId);
+        }
       }
       catalogLoaded = byTitleId.size > 0;
       catalogSourcePath = p;
@@ -619,7 +636,21 @@ async function runFetchTask(conceptId, force = false, metaOnly = false) {
   }
 
   if (!force && Date.now() < (transientUntil.get(cid) || 0)) return getCoverFile(cid);
-  const meta = await fetchStoreMetaRemote(cid);
+  let meta = await fetchStoreMetaRemote(cid);
+  if (!meta.found && !meta.transient) {
+    for (const alt of sameNameConcepts(cid).slice(0, 3)) {
+      const other = await fetchStoreMetaRemote(alt);
+      if (other.found) {
+        console.log(`[catalog] ${cid} 的商店页是空的，用同名游戏 ${alt} 的资料`);
+        meta = { ...other, concept_id: cid };
+        break;
+      }
+      if (other.transient) {
+        meta.transient = true;
+        break;
+      }
+    }
+  }
   // 这次没查成：不写缓存，过一会儿再查，免得一次网络抖动就把游戏记成「商店没有」
   if (!meta.found && meta.transient) {
     transientUntil.set(cid, Date.now() + TRANSIENT_RETRY_MS);
