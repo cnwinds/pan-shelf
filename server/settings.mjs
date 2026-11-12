@@ -51,6 +51,14 @@ export const DEFAULTS = {
     webhook_format: 'json',       // json | wecom | dingtalk | feishu
     on: { run_done: true, new_games: true, error: true, login_expired: true, quota_low: true, site_blocked: true, plan_ready: true },
   },
+  // 用大模型分析分享里的文件和说明，给盘游排安装编排（盘游 docs/adr/0012）。OpenAI 兼容接口
+  llm: {
+    enabled: false,
+    base_url: '',                 // 如 https://api.deepseek.com/v1、http://127.0.0.1:11434/v1
+    api_key: '',
+    model: '',
+    interval_sec: 10,             // 两次分析之间至少隔多久
+  },
   server: {
     port: 5175,
   },
@@ -74,6 +82,7 @@ const RANGES = {
   'transfer.max_per_run': [0, 100000, '每次最多转存'],
   'normalize.op_interval_ms': [0, 60000, '网盘操作间隔'],
   'schedule.probe_interval_min': [5, 1440, '探测间隔'],
+  'llm.interval_sec': [0, 3600, '两次分析的间隔'],
   'server.port': [1024, 65535, '服务端口'],
 };
 
@@ -95,6 +104,8 @@ function validate(s) {
   } catch { errs.push('排除规则不是合法的正则表达式'); }
   if (s.notify.webhook_url && !/^https?:\/\//.test(s.notify.webhook_url)) errs.push('Webhook 地址需以 http:// 或 https:// 开头');
   if (!['json', 'wecom', 'dingtalk', 'feishu'].includes(s.notify.webhook_format)) errs.push('Webhook 消息格式无效');
+  if (s.llm.base_url && !/^https?:\/\//.test(s.llm.base_url)) errs.push('大模型接口地址需以 http:// 或 https:// 开头');
+  if (s.llm.enabled && (!s.llm.base_url || !s.llm.model)) errs.push('打开大模型分析前要填接口地址和模型名');
   if (errs.length) { const e = new Error(errs.join('；')); e.statusCode = 400; throw e; }
   return s;
 }

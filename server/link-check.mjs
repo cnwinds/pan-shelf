@@ -22,18 +22,18 @@ const dueLinks = (before) => all(`
     AND (l.checked_at IS NULL OR l.checked_at < ?)
   ORDER BY l.checked_at IS NOT NULL, l.checked_at, CAST(l.post_id AS INTEGER) DESC`, before);
 
-function recordAlive(link, files) {
+export function recordAlive(link, files) {
   const at = nowIso();
   tx(() => {
     exec('DELETE FROM share_files WHERE surl = ?', link.surl);
-    for (const f of files) exec('INSERT OR REPLACE INTO share_files (surl, path, md5, size) VALUES (?, ?, ?, ?)', link.surl, f.rel, f.md5, f.size || 0);
+    for (const f of files) exec('INSERT OR REPLACE INTO share_files (surl, path, md5, size) VALUES (?, ?, ?, ?)', link.surl, f.path ?? f.rel, f.md5, f.size || 0);
     exec('UPDATE links SET alive = 1, checked_at = ?, files_at = ?, share_size = ? WHERE surl = ?',
       at, at, files.reduce((n, f) => n + (f.size || 0), 0), link.surl);
   });
 }
 
 // 已经在网盘里的（saved / exists）只记下链接死了，状态不动：网盘里那份还在，只是退出后转不回来了
-function recordDead(link, reason) {
+export function recordDead(link, reason) {
   const inPan = link.status === 'saved' || link.status === 'exists';
   exec(`UPDATE links SET alive = 0, checked_at = ?${inPan ? '' : `, status = 'invalid', last_error = ?`} WHERE surl = ?`,
     ...(inPan ? [nowIso(), link.surl] : [nowIso(), `链接检查：${reason}`, link.surl]));

@@ -157,7 +157,7 @@ export async function ensureShareFiles(link) {
   const at = nowIso();
   tx(() => {
     exec('DELETE FROM share_files WHERE surl = ?', link.surl);
-    for (const f of r.files) exec('INSERT OR REPLACE INTO share_files (surl, path, md5, size) VALUES (?, ?, ?, ?)', link.surl, f.rel, f.md5, f.size || 0);
+    for (const f of r.files) exec('INSERT OR REPLACE INTO share_files (surl, path, md5, size) VALUES (?, ?, ?, ?)', link.surl, f.path ?? f.rel, f.md5, f.size || 0);
     exec('UPDATE links SET files_at = ? WHERE surl = ?', at, link.surl);
   });
   link.files_at = at;

@@ -23,6 +23,8 @@ import {
 } from './reviews.mjs';
 import { libraryPublishStatus, publishLibrary } from './library-publish.mjs';
 import { linkCheckStatus, checkLinks } from './link-check.mjs';
+import { analyzeStatus, retryFailed, testLlm } from './analyze.mjs';
+import { feedbackState, syncFeedback } from './feedback.mjs';
 
 const bad = (code, msg) => Object.assign(new Error(msg), { statusCode: code });
 
@@ -511,8 +513,16 @@ export default async function routes(app) {
   app.get('/api/reviews', async () => reviewStatus());
   app.post('/api/reviews/sync', async () => { await syncReviews(); return reviewStatus(); });
   // ---------- 盘游资源库 ----------
-  const panplayLibrary = () => ({ publish: libraryPublishStatus(), links: linkCheckStatus() });
+  const panplayLibrary = () => ({ publish: libraryPublishStatus(), links: linkCheckStatus(), plans: analyzeStatus(), feedback: feedbackState });
   app.get('/api/panplay-library', async () => panplayLibrary());
+  app.post('/api/panplay-library/analyze', async () => { retryFailed(); syncFeedback(); return panplayLibrary(); });
+  app.post('/api/llm/test', async () => {
+    try {
+      return { ok: await testLlm() };
+    } catch (e) {
+      throw bad(400, e.message);
+    }
+  });
   app.post('/api/panplay-library/publish', async () => { await publishLibrary({ force: true }); return panplayLibrary(); });
   app.post('/api/panplay-library/check-links', async () => { checkLinks(); return panplayLibrary(); });
   app.get('/api/reviews/in-pan-bad', async (req) => {

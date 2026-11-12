@@ -19,6 +19,7 @@ const OPTIONAL: { id: keyof Settings; label: string }[] = [
   { id: 'normalize', label: '目录规整' },
   { id: 'schedule', label: '定时运行' },
   { id: 'notify', label: '通知' },
+  { id: 'llm', label: '大模型分析' },
 ];
 
 type Draft = Settings;
@@ -83,6 +84,7 @@ export function SettingsPage() {
               {tab === 'normalize' && <NormalizeForm d={draft} def={data.defaults} set={set} />}
               {tab === 'schedule' && <ScheduleForm d={draft} set={set} />}
               {tab === 'notify' && <NotifyForm d={draft} set={set} dirty={dirty} />}
+              {tab === 'llm' && <LlmForm d={draft} def={data.defaults} set={set} dirty={dirty} />}
             </>
           )}
           {tab === 'account' && <><Account /><StepNext step="account" /></>}
@@ -214,6 +216,7 @@ function OptionalOverview({ s, def }: { s: Settings; def: Settings }) {
     normalize: <>{s.normalize.auto_plan_after_transfer ? '转存后自动生成规整预览' : '手动生成规整预览'}，确认后才执行</>,
     schedule: s.schedule.enabled ? <>每天 {s.schedule.times.join('、') || '—'} 自动运行</> : '未开启，需要手动运行',
     notify: <>{[s.notify.toast && '桌面通知', s.notify.webhook_url && 'Webhook'].filter(Boolean).join(' + ') || '只记录在总览页'}</>,
+    llm: s.llm.enabled ? <>用 {s.llm.model} 给盘游排安装编排</> : '未开启，盘游按固定规则安装',
   } as Record<keyof Settings, ReactNode>;
   return (
     <section className="panel p-5">
@@ -311,6 +314,42 @@ function CrawlForm({ d, def, set }: { d: Draft; def: Draft; set: Setter }) {
         <Num label="请求超时" unit="秒" value={c.timeout_sec} onChange={v => s({ timeout_sec: v })} def={def.crawl.timeout_sec} min={5} />
         <Num label="单个游戏最多失败几次" unit="次" value={c.max_detail_failures} onChange={v => s({ max_detail_failures: v })} def={def.crawl.max_detail_failures} min={1} hint="超过后标记为「抓取失败」，不再自动补抓，可在游戏库手动重试。" />
         <Num label="连续失败几个页面判定为封禁" unit="个" value={c.block_threshold} onChange={v => s({ block_threshold: v })} def={def.crawl.block_threshold} min={1} />
+      </Card>
+    </>
+  );
+}
+
+// ---------- 大模型分析 ----------
+function LlmForm({ d, def, set, dirty }: { d: Draft; def: Draft; set: Setter; dirty: boolean }) {
+  const l = d.llm, s = (p: Partial<Draft['llm']>) => set('llm', p);
+  const test = useMutation({ mutationFn: () => api.post<{ ok: boolean }>('/llm/test') });
+  return (
+    <>
+      <Card title="安装编排" desc={<>资源站的分享五花八门：分卷散在几个目录、补丁有的是压缩包有的是单独文件、说明里还要求把某个文件拷进游戏目录。打开后，盘架把每个游戏分享里的文件清单和说明文件交给大模型，排出主游戏、补丁的叠放顺序和要放的文件，写进发给盘游的资源库，盘游照着装；盘游装的时候发现不对，会经网盘反馈回来重新分析。不开时盘游按固定规则装。</>}>
+        <div className="sm:col-span-2">
+          <Toggle checked={l.enabled} onChange={v => s({ enabled: v })} label="用大模型分析分享内容" hint="只分析资源库里每款游戏每种格式选中的那条链接。说明文件会临时转存到网盘的 /盘架临时 读完就删。" />
+        </div>
+      </Card>
+      <Card title="接口" desc="填任何 OpenAI 兼容接口：DeepSeek、通义千问、OpenAI、本地 Ollama 都行。会把文件名和说明文字发给这个接口。">
+        <Field label="接口地址" hint="例如 https://api.deepseek.com/v1、http://127.0.0.1:11434/v1">
+          <input className="field" placeholder="https://" value={l.base_url} onChange={e => s({ base_url: e.target.value.trim() })} />
+        </Field>
+        <Field label="模型名" hint="例如 deepseek-chat、qwen-plus、gpt-4o-mini">
+          <input className="field" value={l.model} onChange={e => s({ model: e.target.value.trim() })} />
+        </Field>
+        <Field label="密钥" hint="本地模型不需要可以留空。只存在盘架自己的数据库里。">
+          <input className="field" type="password" autoComplete="off" value={l.api_key} onChange={e => s({ api_key: e.target.value.trim() })} />
+        </Field>
+        <Num label="两次分析之间至少隔" unit="秒" value={l.interval_sec} onChange={v => s({ interval_sec: v })} def={def.llm.interval_sec} min={0} />
+        <div className="sm:col-span-2 flex flex-wrap items-center gap-3">
+          <button className="btn btn-sm" disabled={dirty || test.isPending || !l.base_url || !l.model} onClick={() => test.mutate()}>
+            <Send size={12} />测试连接
+          </button>
+          {dirty && <span className="text-xs text-muted">先保存再测试</span>}
+          {test.data?.ok && <span className="text-xs text-ok">接口正常</span>}
+          {test.data && !test.data.ok && <span className="text-xs text-warn">接口通了，但回答不对，换个模型试试</span>}
+          <ErrorNote error={test.error} />
+        </div>
       </Card>
     </>
   );

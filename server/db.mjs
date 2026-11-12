@@ -154,6 +154,36 @@ CREATE TABLE IF NOT EXISTS share_files (
 );
 CREATE INDEX IF NOT EXISTS idx_share_files_md5 ON share_files(md5);
 
+-- 安装编排（盘游 docs/adr/0012）：大模型按分享里的文件和说明排出的装法，一条链接一份。
+-- status：ok 可用 / failed 分析失败 / queued 盘游反馈了问题、等重新分析。rev 每次重新分析加一；
+-- share_sig 是分析时分享里全部文件（路径、大小、md5）的指纹，分享变了就重新分析
+CREATE TABLE IF NOT EXISTS link_plans (
+  surl        TEXT PRIMARY KEY,
+  rev         INTEGER NOT NULL DEFAULT 0,
+  status      TEXT NOT NULL,
+  plan        TEXT,
+  share_sig   TEXT,
+  model       TEXT,
+  error       TEXT,
+  analyzed_at TEXT
+);
+
+-- 盘游的反馈：盘游写在网盘 /盘游/反馈/<设备>.json，读回来记一份，处理过的不再处理
+CREATE TABLE IF NOT EXISTS feedback (
+  id          TEXT PRIMARY KEY,
+  device_id   TEXT NOT NULL,
+  device_name TEXT,
+  surl        TEXT,
+  title_id    TEXT,
+  format      TEXT,
+  kind        TEXT NOT NULL,
+  detail      TEXT,
+  plan_rev    INTEGER NOT NULL DEFAULT 0,
+  at          INTEGER NOT NULL DEFAULT 0,
+  handled_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_surl ON feedback(surl);
+
 CREATE TABLE IF NOT EXISTS store_meta (
   concept_id   INTEGER PRIMARY KEY,
   found        INTEGER NOT NULL DEFAULT 0,

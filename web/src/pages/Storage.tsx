@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, Folder, File, ScanSearch, RefreshCw, FolderInput, Merge, Trash2, PencilLine, CircleCheck, CircleAlert, FolderTree } from 'lucide-react';
+import { ChevronRight, Folder, File, ScanSearch, RefreshCw, FolderInput, Merge, Trash2, PencilLine, CircleCheck, CircleAlert, FolderTree, Sparkles } from 'lucide-react';
 import { api, type DuRow, type InPanBadGame, type NormalizePlan, type PanplayLibraryStatus, type ReviewStatus, type Source } from '../lib/api';
 import { RemoveDialog } from './Games';
 import { useAccount, useOverview, useSources, useStartJob } from '../lib/hooks';
@@ -121,9 +121,14 @@ function PanplayLibraryPanel() {
     mutationFn: () => api.post<PanplayLibraryStatus>('/panplay-library/check-links'),
     onSuccess: s => qc.setQueryData(['panplay-library'], s),
   });
+  const analyze = useMutation({
+    mutationFn: () => api.post<PanplayLibraryStatus>('/panplay-library/analyze'),
+    onSuccess: s => qc.setQueryData(['panplay-library'], s),
+  });
   const s = status.data;
   const p = s?.publish;
   const l = s?.links;
+  const a = s?.plans;
 
   return (
     <section className="panel p-5">
@@ -141,6 +146,17 @@ function PanplayLibraryPanel() {
               {l.running ? '，正在检查…' : l.at ? `，上次 ${dateTime(l.at)}` : ''}。每条链接 7 天复查一次。
             </div>
           )}
+          {a && (
+            <div className="mt-1 text-[13px] text-muted">
+              {a.ready
+                ? <>安装编排：<span className="num text-ink">{a.ok}</span> / {a.total} 条已排好，失败 <span className="num text-bad">{a.failed}</span>，等盘游反馈后重排 <span className="num text-ink">{a.queued}</span>{a.running ? `，正在分析 ${a.current || ''}…` : ''}。</>
+                : <>安装编排：没开大模型分析，盘游按固定规则装。可以在 <Link to="/settings/llm" className="underline hover:text-ink">设置 › 大模型分析</Link> 打开。</>}
+              {s?.feedback.received ? <> 收到盘游反馈 {s.feedback.received} 条。</> : null}
+            </div>
+          )}
+          {a?.recent_errors.length ? (
+            <div className="mt-1 text-xs text-warn">最近失败：{a.recent_errors.map(e => e.error).filter(Boolean).slice(0, 2).join('；')}</div>
+          ) : null}
           {p?.error && <div className="mt-1 text-xs text-warn">上次发布失败：{p.error}</div>}
           {l?.error && <div className="mt-1 text-xs text-warn">链接检查中途停下：{l.error}，下一轮再继续</div>}
         </div>
@@ -148,12 +164,17 @@ function PanplayLibraryPanel() {
           <button className="btn btn-sm" disabled={check.isPending || l?.running} onClick={() => check.mutate()}>
             <ScanSearch size={12} />检查链接
           </button>
+          {a?.ready && (
+            <button className="btn btn-sm" disabled={analyze.isPending || a.running} onClick={() => analyze.mutate()} title="分析还没排的，失败的也重来一遍">
+              <Sparkles size={12} />分析编排
+            </button>
+          )}
           <button className="btn btn-sm" disabled={publish.isPending || p?.running} onClick={() => publish.mutate()}>
             <RefreshCw size={12} className={cx((publish.isPending || p?.running) && 'animate-spin')} />立即发布
           </button>
         </div>
       </div>
-      <ErrorNote error={status.error || publish.error || check.error} />
+      <ErrorNote error={status.error || publish.error || check.error || analyze.error} />
     </section>
   );
 }

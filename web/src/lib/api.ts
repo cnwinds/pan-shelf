@@ -119,6 +119,8 @@ export interface ReviewStatus {
 export interface PanplayLibraryStatus {
   publish: { path: string; running: boolean; at?: string; checked_at?: string; count?: number; error?: string | null };
   links: { running: boolean; at: string | null; checked: number; dead: number; error: string | null; total: number; checked_total: number; dead_total: number };
+  plans: { ready: boolean; running: boolean; current: string | null; at: string | null; error: string | null; ok: number; failed: number; queued: number; total: number; recent_errors: { surl: string; error: string; analyzed_at: string }[] };
+  feedback: { at: string | null; error: string | null; received: number };
 }
 export interface InPanBadGame { serial: string; path: string; size: number; post_id: string | null; title: string; review: Review }
 export interface BlockedAdd { post_id: string; title: string; review: Review }
@@ -195,6 +197,7 @@ export interface Settings {
   normalize: { serial_prefixes: string; op_interval_ms: number; auto_plan_after_transfer: boolean };
   schedule: { enabled: boolean; times: string[]; steps: string[]; probe_enabled: boolean; probe_interval_min: number };
   notify: { toast: boolean; webhook_url: string; webhook_format: string; on: Record<string, boolean> };
+  llm: { enabled: boolean; base_url: string; api_key: string; model: string; interval_sec: number };
   server: { port: number };
 }
 

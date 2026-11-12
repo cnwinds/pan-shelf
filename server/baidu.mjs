@@ -138,6 +138,16 @@ export async function listDir(dir) {
   return out.map(e => ({ name: e.server_filename, isdir: !!+e.isdir, size: +e.size || 0, mtime: e.server_mtime, path: e.path, fs_id: String(e.fs_id), md5: e.md5 || null }));
 }
 
+// 读网盘里的小文件，返回原始字节（说明文件可能是 GBK，调用方自己解码）
+export async function readSmallBytes(fsId, { timeoutSec = 30 } = {}) {
+  const j = await panApi('/api/filemetas', { query: { dlink: '1', fsids: `[${fsId}]` } });
+  const dlink = j.errno === 0 ? j.info?.[0]?.dlink : null;
+  if (!dlink) throw new Error(`取下载地址失败 errno=${j.errno}`);
+  const r = await fetch(dlink, { headers: { 'user-agent': 'pan.baidu.com', cookie: cookieHeader() }, signal: AbortSignal.timeout(timeoutSec * 1000) });
+  if (!r.ok) throw new Error(`下载失败 HTTP ${r.status}`);
+  return Buffer.from(await r.arrayBuffer());
+}
+
 // 读网盘里的小文件（几 KB 的 JSON），返回文本
 export async function readSmallFile(fsId, { timeoutSec = 30 } = {}) {
   const j = await panApi('/api/filemetas', { query: { dlink: '1', fsids: `[${fsId}]` } });
@@ -201,6 +211,9 @@ export async function listShare(surl, pwd, { delayMs = 400, maxDepth = Infinity 
     const headers = { 'user-agent': UA, referer: `https://pan.baidu.com/s/${surl}`, cookie: `BDCLND=${v.randsk}` };
     const files = [];
     const dirs = [];
+    // 分享里的 path 前面带着分享者网盘里的上级目录；按第一层各项的名字推出来，去掉后就是相对分享根的路径
+    let rootPrefix = null;
+    const relative = (p) => (rootPrefix !== null && p.startsWith(rootPrefix) ? p.slice(rootPrefix.length) : p.replace(/^\/+/, ''));
     const queue = [{ dir: null, depth: 1 }];
     while (queue.length) {
       const { dir, depth } = queue.shift();
@@ -210,16 +223,17 @@ export async function listShare(surl, pwd, { delayMs = 400, maxDepth = Infinity 
           { headers, signal: AbortSignal.timeout(20000) })).json();
         if (j.errno !== 0) return { error: SHARE_ERR[j.errno] || `列目录失败 errno=${j.errno}`, invalid: INVALID_ERRNO.includes(j.errno) };
         for (const e of j.list || []) {
+          if (dir === null && rootPrefix === null && e.path?.endsWith(e.server_filename)) rootPrefix = e.path.slice(0, -e.server_filename.length);
           if (+e.isdir) {
             dirs.push(e.path);
             if (depth < maxDepth) queue.push({ dir: e.path, depth: depth + 1 });
-          } else files.push({ rel: e.path, name: e.server_filename, size: +e.size, md5: e.md5 || null });
+          } else files.push({ rel: e.path, path: relative(e.path), name: e.server_filename, size: +e.size, md5: e.md5 || null, fs_id: String(e.fs_id) });
         }
         await sleep(delayMs);
         if ((j.list || []).length < 100) break;
       }
     }
-    return { files, dirs };
+    return { files, dirs: dirs.map(relative) };
   } catch (e) {
     return { error: String(e.message || e).slice(0, 120) };
   }
@@ -292,6 +306,83 @@ export async function mkdir(dir, signal) {
 
 // ---------- 分享转存 ----------
 
+// 带着登录态打开分享页，拿转存要用的 bdstoken / shareid / share_uk。
+// 返回 { short, featureStr, cookie, locals }，出错时返回 { status, detail }（status 同 transferOne）
+async function openShare(surl, pwd, sig) {
+  const short = String(surl).replace(/^1/, '');
+  const featureStr = '1' + short;
+
+  let randsk = '';
+  if (pwd) {
+    const vr = await fetch(`https://pan.baidu.com/share/verify?surl=${short}&t=${Date.now()}&channel=chunlei&web=1&clienttype=0`, {
+      method: 'POST',
+      signal: sig,
+      headers: {
+        'user-agent': UA,
+        referer: `https://pan.baidu.com/share/init?surl=${short}`,
+        'content-type': 'application/x-www-form-urlencoded',
+        cookie: cookieHeader(),
+      },
+      body: `pwd=${encodeURIComponent(pwd)}&vcode=&vcode_str=`,
+    });
+    const vj = await vr.json();
+    if (vj.errno === -9 || vj.errno === -12) return { status: 'err_pwd', detail: SHARE_ERR[vj.errno] || '提取码错误' };
+    if (INVALID_ERRNO.includes(vj.errno)) return { status: 'invalid', detail: SHARE_ERR[vj.errno] || `链接已失效 errno=${vj.errno}` };
+    if (vj.errno !== 0) return { status: 'err_' + vj.errno, detail: SHARE_ERR[vj.errno] || `验证提取码失败 errno=${vj.errno}` };
+    randsk = vj.randsk || '';
+  }
+
+  const cookie = cookieHeader(randsk ? `BDCLND=${randsk}` : '');
+  const pr = await fetch(`https://pan.baidu.com/s/${featureStr}`, {
+    signal: sig,
+    headers: {
+      'user-agent': NETDISK_UA,
+      referer: pwd ? `https://pan.baidu.com/share/init?surl=${short}` : 'https://pan.baidu.com/disk/home',
+      cookie,
+    },
+  });
+  const html = await pr.text();
+  if (pr.url.includes('/error') || html.includes('error-404') || html.includes('platform-non-found') || html.includes('share-error-left')) {
+    return { status: 'invalid', detail: '分享链接已失效或不存在' };
+  }
+  if (pr.url.includes('/share/init')) {
+    return { status: 'err_pwd', detail: '需要提取码或提取码错误' };
+  }
+  const m = html.match(/(\{"[^\r\n]+?"loginstate"[^\r\n]+?\})/);
+  if (!m) return { status: 'err_-6', detail: '未能从分享页获取登录态，请检查 BDUSS/STOKEN' };
+  const locals = JSON.parse(m[1]);
+  if (!locals.bdstoken || !locals.loginstate) return { status: 'err_-6', detail: '百度网盘登录态已失效（缺少 bdstoken）' };
+  if (!locals.shareid || !locals.share_uk) return { status: 'invalid', detail: '分享页缺少 shareid / share_uk' };
+  return { short, featureStr, cookie, locals };
+}
+
+// 只转存分享里的几个文件（fs_id 来自 listShare）到 destDir，读说明文件用。返回出错原因，成功为 null
+export async function transferShareFiles(surl, pwd, fsids, destDir, { timeoutSec = 60 } = {}) {
+  return writeLock.run(async () => {
+    const sig = AbortSignal.timeout(timeoutSec * 1000);
+    try {
+      const dirRes = await mkdirRaw(destDir, sig);
+      if (!dirRes.ok) return `建临时目录失败 errno=${dirRes.errno}`;
+      const opened = await openShare(surl, pwd, sig);
+      if (opened.status) return opened.detail;
+      const qs = new URLSearchParams({
+        app_id: XPAN_APP_ID, bdstoken: String(opened.locals.bdstoken), channel: 'chunlei', clienttype: '0',
+        from: String(opened.locals.share_uk), shareid: String(opened.locals.shareid), web: '1',
+      });
+      const tr = await fetch(`https://pan.baidu.com/share/transfer?${qs}`, {
+        method: 'POST',
+        signal: sig,
+        headers: { 'user-agent': UA, referer: `https://pan.baidu.com/s/${opened.featureStr}`, 'content-type': 'application/x-www-form-urlencoded', cookie: opened.cookie },
+        body: new URLSearchParams({ fsidlist: `[${fsids.join(',')}]`, path: destDir }).toString(),
+      });
+      const tj = await tr.json();
+      return tj.errno === 0 ? null : `转存说明文件失败 errno=${tj.errno}${tj.show_msg ? `：${tj.show_msg}` : ''}`;
+    } catch (e) {
+      return String(e.message || e).slice(0, 160);
+    }
+  });
+}
+
 // 转存一个分享到 destDir。返回 { status, detail }
 // status: saved | exists | invalid | err_quota | err_pwd | err_<code> | exc
 export async function transferOne(surl, pwd, destDir, { timeoutSec = 180, signal } = {}) {
@@ -303,50 +394,9 @@ export async function transferOne(surl, pwd, destDir, { timeoutSec = 180, signal
         return { status: 'err_cd', detail: `目标目录不可用 (errno=${dirRes.errno}): ${destDir}`.slice(0, 160) };
       }
 
-      const short = String(surl).replace(/^1/, '');
-      const featureStr = '1' + short;
-
-      let randsk = '';
-      if (pwd) {
-        const vr = await fetch(`https://pan.baidu.com/share/verify?surl=${short}&t=${Date.now()}&channel=chunlei&web=1&clienttype=0`, {
-          method: 'POST',
-          signal: sig,
-          headers: {
-            'user-agent': UA,
-            referer: `https://pan.baidu.com/share/init?surl=${short}`,
-            'content-type': 'application/x-www-form-urlencoded',
-            cookie: cookieHeader(),
-          },
-          body: `pwd=${encodeURIComponent(pwd)}&vcode=&vcode_str=`,
-        });
-        const vj = await vr.json();
-        if (vj.errno === -9 || vj.errno === -12) return { status: 'err_pwd', detail: SHARE_ERR[vj.errno] || '提取码错误' };
-        if (INVALID_ERRNO.includes(vj.errno)) return { status: 'invalid', detail: SHARE_ERR[vj.errno] || `链接已失效 errno=${vj.errno}` };
-        if (vj.errno !== 0) return { status: 'err_' + vj.errno, detail: SHARE_ERR[vj.errno] || `验证提取码失败 errno=${vj.errno}` };
-        randsk = vj.randsk || '';
-      }
-
-      const cookie = cookieHeader(randsk ? `BDCLND=${randsk}` : '');
-      const pr = await fetch(`https://pan.baidu.com/s/${featureStr}`, {
-        signal: sig,
-        headers: {
-          'user-agent': NETDISK_UA,
-          referer: pwd ? `https://pan.baidu.com/share/init?surl=${short}` : 'https://pan.baidu.com/disk/home',
-          cookie,
-        },
-      });
-      const html = await pr.text();
-      if (pr.url.includes('/error') || html.includes('error-404') || html.includes('platform-non-found') || html.includes('share-error-left')) {
-        return { status: 'invalid', detail: '分享链接已失效或不存在' };
-      }
-      if (pr.url.includes('/share/init')) {
-        return { status: 'err_pwd', detail: '需要提取码或提取码错误' };
-      }
-      const m = html.match(/(\{"[^\r\n]+?"loginstate"[^\r\n]+?\})/);
-      if (!m) return { status: 'err_-6', detail: '未能从分享页获取登录态，请检查 BDUSS/STOKEN' };
-      const locals = JSON.parse(m[1]);
-      if (!locals.bdstoken || !locals.loginstate) return { status: 'err_-6', detail: '百度网盘登录态已失效（缺少 bdstoken）' };
-      if (!locals.shareid || !locals.share_uk) return { status: 'invalid', detail: '分享页缺少 shareid / share_uk' };
+      const opened = await openShare(surl, pwd, sig);
+      if (opened.status) return opened;
+      const { short, featureStr, cookie, locals } = opened;
 
       const listQs = new URLSearchParams({
         app_id: XPAN_APP_ID,

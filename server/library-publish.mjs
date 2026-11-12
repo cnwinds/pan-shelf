@@ -32,7 +32,8 @@ function better(a, b) {
   return Number(b.post_id) - Number(a.post_id);
 }
 
-export function buildLibrary() {
+// 资源库里每款游戏每种格式用哪条链接
+function chooseLinks() {
   const posts = new Map(all('SELECT * FROM posts').map(p => [`${p.source_id}/${p.post_id}`, p]));
   const enriched = new Map();
   const games = new Map();
@@ -57,9 +58,23 @@ export function buildLibrary() {
     const cur = g.byFormat.get(format);
     if (!cur || better(cand, cur) < 0) g.byFormat.set(format, cand);
   }
+  return { games, enriched };
+}
 
+// 资源库里选中的链接，编排分析只分析这些：[{ surl, pwd, title_id, format, name, post }]
+export function libraryLinks() {
+  const { games, enriched } = chooseLinks();
+  return [...games.values()].flatMap(g => [...g.byFormat.values()].map(l => ({
+    surl: l.surl, pwd: l.pwd || '', status: l.status, title_id: g.title_id, format: l.format, remark: l.remark || '', dead: isDead(l),
+    name: enriched.get(g.post).display_name, source_id: l.source_id, post_id: l.post_id,
+  })));
+}
+
+export function buildLibrary() {
+  const { games, enriched } = chooseLinks();
   const chosen = [...games.values()].flatMap(g => [...g.byFormat.values()]);
   const matches = shareMatches(chosen.map(l => l.surl));
+  const plans = new Map(all(`SELECT surl, plan FROM link_plans WHERE status IN ('ok', 'queued') AND plan IS NOT NULL`).map(p => [p.surl, p.plan]));
   const out = [...games.values()].map(g => ({
     title_id: g.title_id,
     concept_id: g.concept_id || 0,
@@ -76,6 +91,10 @@ export function buildLibrary() {
       v.checked_at = unix(l.checked_at);
       const r = matches.get(l.surl)?.[0];
       if (r) v.review = { playable: r.playable, note: r.note, firmware: r.firmware, device: r.device, at: r.at };
+      if (plans.has(l.surl)) {
+        v.plan = JSON.parse(plans.get(l.surl));
+        if (v.plan.size) v.size = v.plan.size;
+      }
       return v;
     }),
   })).sort((a, b) => b.added_at - a.added_at || a.title_id.localeCompare(b.title_id));
@@ -131,6 +150,6 @@ export const libraryPublishStatus = () => ({ ...loadState(), path: LIBRARY_PATH,
 export function startLibraryPublish() {
   setTimeout(publishLibrary, 45_000);
   setInterval(publishLibrary, INTERVAL_MS);
-  for (const ev of ['links_checked', 'reviews']) bus.on(ev, publishSoon);
+  for (const ev of ['links_checked', 'reviews', 'plans']) bus.on(ev, publishSoon);
   bus.on('job', (job) => { if (job?.status === 'done' && job.type === 'crawl') publishSoon(); });
 }
