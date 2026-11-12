@@ -620,6 +620,16 @@ export default async function routes(app) {
     if (!cid || cid <= 0) return reply.code(404).send({ error: 'invalid concept id' });
     const file = getCoverFile(cid);
     if (!file || !fs.existsSync(file)) {
+      const sm = one('SELECT found, fetched_at FROM store_meta WHERE concept_id = ?', cid);
+      if (sm && sm.fetched_at > 0 && !sm.found) {
+        // 商店里没有这款：换成帖子里的封面
+        const post = all(`SELECT source_id, post_id, site_meta FROM posts WHERE concept_id = ? AND site_meta LIKE '%"cover":"http%'
+                          ORDER BY CAST(post_id AS INTEGER) DESC LIMIT 1`, cid)[0];
+        if (post) {
+          return reply.code(302).header('Cache-Control', 'no-store')
+            .header('Location', `/api/post-cover/${encodeURIComponent(post.source_id)}/${encodeURIComponent(post.post_id)}`).send();
+        }
+      }
       // 不能等商店下载：浏览器对同一站点只有 6 个连接，一页上百张封面会把列表接口堵住
       ensureCoverFile(cid, { priority: true }).catch(() => {});
       return reply.code(404).header('Cache-Control', 'no-store').send({ error: 'cover not ready' });
@@ -633,8 +643,11 @@ export default async function routes(app) {
   });
   app.get('/api/post-cover/:sourceId/:postId', async (req, reply) => {
     const row = one('SELECT site_meta FROM posts WHERE source_id = ? AND post_id = ?', req.params.sourceId, String(req.params.postId));
-    const file = await postCoverFile(siteCoverUrl(row));
-    if (!file) return reply.code(404).header('Cache-Control', 'no-store').send({ error: 'cover not available' });
+    const url = siteCoverUrl(row);
+    if (!url) return reply.code(404).header('Cache-Control', 'no-store').send({ error: 'cover not available' });
+    const file = await postCoverFile(url);
+    // 盘架这边下不下来（连不上图床）就让浏览器自己去取
+    if (!file) return reply.code(302).header('Cache-Control', 'no-store').header('Location', url).send();
     const buf = fs.readFileSync(file);
     reply
       .header('Content-Type', detectImageMime(buf))

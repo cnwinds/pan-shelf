@@ -745,9 +745,8 @@ async function runFetchTask(conceptId, force = false, metaOnly = false) {
   };
   exec(STORE_UPSERT, ...STORE_COLS.map((c) => rec[c] ?? null));
 
-  if (meta.found) {
-    bus.emit('meta', { concept_id: cid, has_cover: Boolean(coverFile) });
-  }
+  // 没查到也要通知：页面上先放的是商店封面地址，查完才知道要换成帖子里的封面
+  bus.emit('meta', { concept_id: cid, has_cover: Boolean(coverFile) });
   return coverFile;
 }
 
