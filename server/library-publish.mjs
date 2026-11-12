@@ -192,6 +192,7 @@ function publishSoon() {
 export const libraryPublishStatus = () => ({ ...loadState(), path: LIBRARY_PATH, running: !!running });
 
 export function startLibraryPublish() {
+  setTimeout(() => bd.tidyLegacyDirs().catch(e => console.warn(`整理网盘根目录的旧工作目录失败：${e.message}`)), 40_000);
   setTimeout(publishLibrary, 45_000);
   setInterval(publishLibrary, INTERVAL_MS);
   for (const ev of ['links_checked', 'reviews', 'plans']) bus.on(ev, publishSoon);

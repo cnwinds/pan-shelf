@@ -253,7 +253,8 @@ async function fileManager(opera, filelist, { timeoutSec = 180, signal } = {}) {
 
 // 百度风控要求安全验证时（errno 132，网页版会弹短信验证）接口删不掉文件，移动/改名不受影响
 const NEED_VERIFY = 132;
-export const TRASH_DIR = '/盘架待删除';
+// 和盘游共用，删不掉的都在这一个目录里
+export const TRASH_DIR = '/盘游/待删除';
 
 const splitPath = (p) => {
   const i = p.lastIndexOf('/');
@@ -292,6 +293,31 @@ export async function rm(paths, signal) {
     }
     return 'trashed';
   }, signal);
+}
+
+// 以前盘架、盘游的工作目录放在网盘根目录：待删除的并进 TRASH_DIR，临时的直接删。旧版盘游还会建 /盘游待删除，每次启动都看一下
+const LEGACY_TRASH_DIRS = ['/盘架待删除', '/盘游待删除'];
+const LEGACY_TEMP_DIRS = ['/盘架临时'];
+export async function tidyLegacyDirs() {
+  const root = (await listDir('/')) || [];
+  const dirs = new Set(root.filter(e => e.isdir).map(e => e.path));
+  let moved = 0;
+  for (const old of LEGACY_TRASH_DIRS.filter(d => dirs.has(d))) {
+    const items = (await listDir(old)) || [];
+    await guardedWrite(async () => {
+      await mkdirRaw(TRASH_DIR);
+      for (const it of items) {
+        let m = await fileManager('move', [{ path: it.path, dest: TRASH_DIR, newname: it.name }]);
+        if (!m.ok) m = await fileManager('move', [{ path: it.path, dest: TRASH_DIR, newname: `${it.name} (${Date.now()})` }]);
+        if (m.ok) moved++;
+      }
+      // 删不掉（要安全验证）就留着空目录，不挪进待删除
+      if (!((await listDir(old)) || []).length) await fileManager('delete', [old]);
+      return true;
+    });
+  }
+  for (const old of LEGACY_TEMP_DIRS.filter(d => dirs.has(d))) await rm([old]);
+  if (moved) console.log(`网盘根目录的待删除目录已并进 ${TRASH_DIR}：${moved} 项`);
 }
 
 async function mkdirRaw(dir, signal) {

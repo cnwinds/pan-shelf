@@ -10,7 +10,7 @@ import { recordAlive, recordDead } from './link-check.mjs';
 import { linkFormat } from './layout.mjs';
 import { nowIso, sleep } from './util.mjs';
 
-const TEMP_ROOT = '/盘架临时';
+const TEMP_ROOT = '/盘游/临时';
 const TEXT_RE = /\.(txt|md|nfo|url|ini|json|html?|cfg)$/i;
 const ARCHIVE_RE = /\.(rar|zip|7z)$|\.(7z|zip)\.\d{3}$|\.z\d{2}$|\.r\d{2}$/i;
 const MAX_TEXT_BYTES = 256 * 1024;

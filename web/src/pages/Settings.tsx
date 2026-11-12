@@ -327,7 +327,7 @@ function LlmForm({ d, def, set, dirty }: { d: Draft; def: Draft; set: Setter; di
     <>
       <Card title="安装编排" desc={<>资源站的分享五花八门：分卷散在几个目录、补丁有的是压缩包有的是单独文件、说明里还要求把某个文件拷进游戏目录。打开后，盘架把每个游戏分享里的文件清单和说明文件交给大模型，排出主游戏、补丁的叠放顺序和要放的文件，写进发给盘游的资源库，盘游照着装；盘游装的时候发现不对，会经网盘反馈回来重新分析。不开时盘游按固定规则装。</>}>
         <div className="sm:col-span-2">
-          <Toggle checked={l.enabled} onChange={v => s({ enabled: v })} label="用大模型分析分享内容" hint="只分析资源库里每款游戏每种格式选中的那条链接。说明文件会临时转存到网盘的 /盘架临时 读完就删。" />
+          <Toggle checked={l.enabled} onChange={v => s({ enabled: v })} label="用大模型分析分享内容" hint="只分析资源库里每款游戏每种格式选中的那条链接。说明文件会临时转存到网盘的 /盘游/临时 读完就删。" />
         </div>
       </Card>
       <Card title="接口" desc="填任何 OpenAI 兼容接口：DeepSeek、通义千问、OpenAI、本地 Ollama 都行。会把文件名和说明文字发给这个接口。">
