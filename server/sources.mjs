@@ -36,6 +36,40 @@ export function extractSerial(html) {
   return m ? (m[1] + m[2].padStart(5, '0')).toUpperCase() : null;
 }
 
+const htmlText = (s) => s
+  .replace(/<br\s*\/?>/gi, '\n')
+  .replace(/<[^>]+>/g, '')
+  .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+  .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+  .replace(/&amp;/g, '&')
+  .split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+
+// 帖子正文里的游戏资料（WordPress 帖子：第一张图是封面，接着是「发行商：…」这类信息，再往后是介绍）。
+// 商店页下架了的游戏靠它显示封面和介绍；什么都没取到返回 null
+export function extractPostMeta(html) {
+  const start = html.indexOf('class="entry-content');
+  if (start < 0) return null;
+  let body = html.slice(html.indexOf('>', start) + 1);
+  const end = body.search(/<div class="bdp-container|<div id="pay-single-box"|<div class="article-copyright"/);
+  if (end >= 0) body = body.slice(0, end);
+  body = body.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, '');
+  const paras = body.split(/<\/p>/i).map(htmlText).filter(Boolean);
+  const info = paras.find(p => /(发行商|游戏编号)\s*[:：]/.test(p)) || '';
+  const field = (label) => (info.match(new RegExp(`${label}\\s*[:：]\\s*([^\\n]+)`)) || [])[1]?.trim() || '';
+  const date = field('发行日期').match(/(\d{4})\D(\d{1,2})\D(\d{1,2})/);
+  const description = paras
+    .filter(p => p !== info && !(p.length < 60 && /更新|提取码|网盘|下载/.test(p)))
+    .join('\n\n').slice(0, 3000).trim();
+  const meta = {
+    cover: (body.match(/<img[^>]+src="(https?:\/\/[^"]+)"/i) || [])[1] || '',
+    publisher: field('发行商'),
+    developer: field('开发商'),
+    release_date: date ? `${date[1]}-${date[2].padStart(2, '0')}-${date[3].padStart(2, '0')}` : '',
+    description,
+  };
+  return Object.values(meta).some(Boolean) ? meta : null;
+}
+
 const pageTitle = (html, strip) => {
   const tm = html.match(/<title>([^<]*)<\/title>/i);
   let t = tm ? tm[1].trim() : '';
@@ -68,6 +102,7 @@ export const ADAPTERS = {
       title: pageTitle(html, s.options.title_suffix ? escapeRe(s.options.title_suffix) : ''),
       links: extractBaiduLinks(html),
       serial: extractSerial(html),
+      meta: extractPostMeta(html),
     }),
   },
   generic: {

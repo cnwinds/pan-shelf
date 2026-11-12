@@ -111,12 +111,14 @@ defineJob('crawl', {
         ctx.log('warn', `[${post.post_id}] 详情抓取失败：${hostHealth(post.url).last_error}`);
         continue;
       }
-      const { title, links, serial } = adapter.extractDetail(html, src);
+      const { title, links, serial, meta } = adapter.extractDetail(html, src);
       const catMatch = matchCatalogForPost(serial, title || post.title);
       const finalSerial = serial || catMatch?.titleId || null;
       const finalConceptId = catMatch?.conceptId || null;
-      exec(`UPDATE posts SET title = ?, serial = COALESCE(?, serial), concept_id = COALESCE(?, concept_id), status = ?, crawled_at = ?, fail_count = 0, last_error = NULL WHERE source_id = ? AND post_id = ?`,
-        title || post.title, finalSerial, finalConceptId, links.length ? 'links_done' : 'no_link', nowIso(), src.id, post.post_id);
+      exec(`UPDATE posts SET title = ?, serial = COALESCE(?, serial), concept_id = COALESCE(?, concept_id), status = ?, crawled_at = ?, fail_count = 0, last_error = NULL,
+            site_meta = COALESCE(?, site_meta) WHERE source_id = ? AND post_id = ?`,
+        title || post.title, finalSerial, finalConceptId, links.length ? 'links_done' : 'no_link', nowIso(),
+        meta === undefined ? null : JSON.stringify(meta || {}), src.id, post.post_id);
       counters.crawled++;
       if (!links.length) counters.no_link++;
       let added = 0;

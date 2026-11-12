@@ -1493,7 +1493,8 @@
 .intro-more:hover {
   color: #a9c6ff;
 }
-.intro-empty {
+.intro-empty,
+.intro-source {
   margin: 0;
   font-size: 0.78rem;
   color: var(--faint);

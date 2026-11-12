@@ -240,6 +240,8 @@ if (!postCols.has('serial')) db.exec('ALTER TABLE posts ADD COLUMN serial TEXT')
 if (!postCols.has('share_serials')) db.exec('ALTER TABLE posts ADD COLUMN share_serials TEXT');
 if (!postCols.has('custom_name')) db.exec('ALTER TABLE posts ADD COLUMN custom_name TEXT');
 if (!postCols.has('concept_id')) db.exec('ALTER TABLE posts ADD COLUMN concept_id INTEGER');
+// 帖子正文里的封面、发行商、介绍（JSON）。商店里没有资料时拿它补；'{}' 是抓过但没取到
+if (!postCols.has('site_meta')) db.exec('ALTER TABLE posts ADD COLUMN site_meta TEXT');
 
 export function tx(fn) {
   db.exec('BEGIN');

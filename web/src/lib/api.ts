@@ -165,6 +165,8 @@ export interface Game {
   genres?: string;
   release_date?: string;
   description?: string;
+  /** store：PlayStation 商店；site：资源站帖子（商店页下架了） */
+  description_source?: 'store' | 'site' | '';
   rating?: number | null;
   rating_count?: number | null;
   /** 5 星到 1 星各自的百分比 */

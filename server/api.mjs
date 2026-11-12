@@ -13,7 +13,8 @@ import { resolveRemoval, resetLinks } from './tasks/remove.mjs';
 import { serialsFromName } from './tasks/normalize.mjs';
 import { pickLinks, isFormatDir, formatOfDir } from './linkpick.mjs';
 import { linkFormat, formatStates } from './layout.mjs';
-import { enrichGameRow, ensureCoverFile, getCoverFile, detectImageMime, refreshStoreMeta, lookupCatalogBySerial } from './catalog.mjs';
+import { refreshPostMeta } from './site-meta.mjs';
+import { enrichGameRow, ensureCoverFile, getCoverFile, detectImageMime, refreshStoreMeta, lookupCatalogBySerial, siteCoverUrl, postCoverFile } from './catalog.mjs';
 import { bus } from './bus.mjs';
 import { changeDestDir } from './destdir.mjs';
 import { panInventorySets, syncPanInventory, refreshIfStale } from './pan-inventory.mjs';
@@ -605,8 +606,12 @@ export default async function routes(app) {
       row = one('SELECT * FROM posts WHERE source_id = ? AND post_id = ?', source_id, String(post_id));
       if (row && !cid) cid = Number(row.concept_id || 0);
     }
-    if (!cid || cid <= 0) throw bad(400, '该游戏没有关联 PlayStation Store Concept ID');
-    await refreshStoreMeta(cid);
+    if ((!cid || cid <= 0) && !row) throw bad(400, '该游戏没有关联 PlayStation Store Concept ID');
+    const meta = cid > 0 ? await refreshStoreMeta(cid) : null;
+    if (row && !meta?.description) {
+      await refreshPostMeta(row);
+      row = one('SELECT * FROM posts WHERE source_id = ? AND post_id = ?', source_id, String(post_id));
+    }
     if (row) return { ok: true, game: await gameDetail(source_id, row, enrichGameRow(row)) };
     return { ok: true, concept_id: cid };
   });
@@ -623,6 +628,16 @@ export default async function routes(app) {
     const mime = detectImageMime(buf);
     reply
       .header('Content-Type', mime)
+      .header('Cache-Control', 'public, max-age=604800')
+      .send(buf);
+  });
+  app.get('/api/post-cover/:sourceId/:postId', async (req, reply) => {
+    const row = one('SELECT site_meta FROM posts WHERE source_id = ? AND post_id = ?', req.params.sourceId, String(req.params.postId));
+    const file = await postCoverFile(siteCoverUrl(row));
+    if (!file) return reply.code(404).header('Cache-Control', 'no-store').send({ error: 'cover not available' });
+    const buf = fs.readFileSync(file);
+    reply
+      .header('Content-Type', detectImageMime(buf))
       .header('Cache-Control', 'public, max-age=604800')
       .send(buf);
   });

@@ -1215,17 +1215,15 @@ function GameDrawer({
             style={hasCover ? { backgroundImage: `url("${coverSrc}")` } : undefined}
           />
 
-          {game.concept_id ? (
-            <button
-              type="button"
-              className="drawer-refresh"
-              onClick={() => refreshMeta.mutate()}
-              disabled={refreshMeta.isPending}
-              title="重新从 PlayStation 商店获取封面与中文简介"
-            >
-              <RefreshCw size={15} className={cx(refreshMeta.isPending && 'animate-spin')} />
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="drawer-refresh"
+            onClick={() => refreshMeta.mutate()}
+            disabled={refreshMeta.isPending}
+            title="重新获取封面与简介（商店里没有就用资源站帖子里的）"
+          >
+            <RefreshCw size={15} className={cx(refreshMeta.isPending && 'animate-spin')} />
+          </button>
 
           <button type="button" className="drawer-x" onClick={onClose} aria-label="关闭">
             <X size={16} />
@@ -1389,12 +1387,15 @@ function GameDrawer({
                       {introOpen ? '收起' : '展开全部'}
                     </button>
                   )}
+                  {game.description_source === 'site' && (
+                    <p className="intro-source">PlayStation 商店里已经没有这款游戏的页面，介绍取自资源站帖子</p>
+                  )}
                 </>
               ) : game.meta_state === 'pending' || detail.isFetching || refreshMeta.isPending ? (
-                <p className="intro-empty">正在从 PlayStation 商店获取游戏介绍…</p>
+                <p className="intro-empty">正在获取游戏介绍…</p>
               ) : (
                 <p className="intro-empty">
-                  商店暂无这款游戏的介绍，可点右上角
+                  PlayStation 商店和资源站帖子里都没有这款游戏的介绍，可点右上角
                   <RefreshCw size={11} className="mx-1 inline align-[-1px]" />
                   重新获取。
                 </p>

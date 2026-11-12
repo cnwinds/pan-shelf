@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { STATE_DIR } from './paths.mjs';
 import { all, one, exec, tx } from './db.mjs';
 import { bus } from './bus.mjs';
@@ -18,14 +19,24 @@ const CATALOG_PATHS = [
 
 const byTitleId = new Map();
 const byNormName = new Map();
-// conceptId → 资料库里的名字；名字 → 用这个名字的全部 conceptId（各区、PS4 / PS5 版各有各的）
+// conceptId → 资料库里它的全部名字（各编号写的可能不一样）；名字 → 用这个名字的全部 conceptId（各区、PS4 / PS5 版各有各的）
 const nameByConcept = new Map();
 const conceptsByName = new Map();
 
 // 同名游戏的其他 conceptId。有的 PS5 版商店页是空的（下架了，或者只有 PS4 版那页写着 PS4 / PS5），借它们的资料
 function sameNameConcepts(conceptId) {
-  const key = nameByConcept.get(Number(conceptId));
-  return key ? [...(conceptsByName.get(key) || [])].filter(c => c !== Number(conceptId)) : [];
+  const out = new Set();
+  for (const name of nameByConcept.get(Number(conceptId)) || []) {
+    for (const c of conceptsByName.get(exactNorm(name)) || []) if (c !== Number(conceptId)) out.add(c);
+  }
+  return [...out];
+}
+
+// 商店页的名字是不是这个 conceptId 在资料库里的某个名字
+function catalogNameIs(conceptId, storeName) {
+  if (!exactNorm(storeName)) return false;
+  return [...(nameByConcept.get(Number(conceptId)) || [])].some(n =>
+    exactNorm(n) === exactNorm(storeName) || (!!normEnglish(storeName) && normEnglish(n) === normEnglish(storeName)));
 }
 let catalogLoaded = false;
 let catalogSourcePath = '';
@@ -188,7 +199,8 @@ export function initCatalog() {
         registerNameIndex(normEnglish(entry.name), entry);
         const key = exactNorm(entry.name);
         if (entry.conceptId && key) {
-          if (!nameByConcept.has(entry.conceptId)) nameByConcept.set(entry.conceptId, key);
+          if (!nameByConcept.has(entry.conceptId)) nameByConcept.set(entry.conceptId, new Set());
+          nameByConcept.get(entry.conceptId).add(entry.name);
           if (!conceptsByName.has(key)) conceptsByName.set(key, new Set());
           conceptsByName.get(key).add(entry.conceptId);
         }
@@ -287,6 +299,19 @@ export function initCatalog() {
     const n = exec('DELETE FROM store_meta WHERE found = 0').changes;
     exec('INSERT INTO settings (key, value) VALUES (?, ?)', '_store_missing_recheck_v1', JSON.stringify({ at: new Date().toISOString(), cleared: n }));
     if (n) console.log(`[catalog] 重新查 ${n} 个之前记成「商店没有」的游戏`);
+  }
+
+  // 3d. 上一版借同名游戏资料时没核对名字，可能借到了合集的商店页：名字对不上的清掉重新查
+  if (catalogLoaded && !one('SELECT value FROM settings WHERE key = ?', '_store_borrow_recheck_v1')) {
+    let n = 0;
+    for (const r of all('SELECT concept_id, name FROM store_meta WHERE found = 1')) {
+      if (!exactNorm(r.name) || !sameNameConcepts(r.concept_id).length || catalogNameIs(r.concept_id, r.name)) continue;
+      exec('DELETE FROM store_meta WHERE concept_id = ?', r.concept_id);
+      try { fs.unlinkSync(path.join(COVERS_DIR, `${r.concept_id}.img`)); } catch {}
+      n++;
+    }
+    exec('INSERT INTO settings (key, value) VALUES (?, ?)', '_store_borrow_recheck_v1', JSON.stringify({ at: new Date().toISOString(), cleared: n }));
+    if (n) console.log(`[catalog] 重新查 ${n} 个商店资料名字和游戏对不上的`);
   }
 
   // 4. Kick off background warm-up for transferred / pending_transfer games first
@@ -520,7 +545,7 @@ const TRANSIENT_RETRY_MS = 30 * 60_000;
 const transientUntil = new Map();
 
 // 返回 found 为 false 时，transient 表示有地区这次没查成，不能断定商店里没有
-async function fetchStoreMetaRemote(conceptId) {
+async function fetchStoreMetaRemote(conceptId, locales = LOCALES) {
   let best = {
     concept_id: Number(conceptId),
     found: false,
@@ -533,7 +558,7 @@ async function fetchStoreMetaRemote(conceptId) {
     description: '',
   };
 
-  for (const locale of LOCALES) {
+  for (const locale of locales) {
     const url = `https://store.playstation.com/${locale}/concept/${conceptId}`;
     try {
       const res = await fetch(url, {
@@ -562,6 +587,15 @@ async function fetchStoreMetaRemote(conceptId) {
   return best;
 }
 
+// 资料库里同名的 conceptId 不一定是同一款：有的其实是合集的商店页（Winter Sports Games 那个是 Sports Games Collection）。
+// 商店页的名字要和资料库里的名字对得上才借；中文名比不了，再看英文商店页的名字
+async function storeNameMatching(ownConceptId, altConceptId, meta) {
+  if (catalogNameIs(ownConceptId, meta.name)) return meta.name;
+  if (/^(en|ja)/.test(meta.locale) && exactNorm(meta.name)) return '';
+  const en = await fetchStoreMetaRemote(altConceptId, ['en-us', 'en-gb']);
+  return catalogNameIs(ownConceptId, en.name) ? en.name : '';
+}
+
 async function downloadCoverToDisk(conceptId, coverUrl) {
   if (!coverUrl) return null;
   const existing = getCoverFile(conceptId);
@@ -576,6 +610,25 @@ async function downloadCoverToDisk(conceptId, coverUrl) {
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length <= 64 || detectImageMime(buf) === 'application/octet-stream') return null;
     const target = path.join(COVERS_DIR, `${conceptId}.img`);
+    const tmp = `${target}.tmp.${process.pid}`;
+    fs.writeFileSync(tmp, buf);
+    fs.renameSync(tmp, target);
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+// 帖子里的封面（商店页下架的游戏用），按图片地址缓存
+export async function postCoverFile(url) {
+  if (!/^https?:\/\//.test(url || '')) return null;
+  const target = path.join(COVERS_DIR, `site-${crypto.createHash('sha1').update(url).digest('hex').slice(0, 16)}.img`);
+  try { if (fs.statSync(target).size > 64) return target; } catch {}
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length <= 64 || detectImageMime(buf) === 'application/octet-stream') return null;
     const tmp = `${target}.tmp.${process.pid}`;
     fs.writeFileSync(tmp, buf);
     fs.renameSync(tmp, target);
@@ -640,15 +693,19 @@ async function runFetchTask(conceptId, force = false, metaOnly = false) {
   if (!meta.found && !meta.transient) {
     for (const alt of sameNameConcepts(cid).slice(0, 3)) {
       const other = await fetchStoreMetaRemote(alt);
-      if (other.found) {
-        console.log(`[catalog] ${cid} 的商店页是空的，用同名游戏 ${alt} 的资料`);
-        meta = { ...other, concept_id: cid };
-        break;
-      }
       if (other.transient) {
         meta.transient = true;
         break;
       }
+      if (!other.found) continue;
+      const name = await storeNameMatching(cid, alt, other);
+      if (!name) {
+        console.log(`[catalog] ${cid} 的商店页是空的，同名的 ${alt} 商店页是「${other.name}」，不是同一款，不借`);
+        continue;
+      }
+      console.log(`[catalog] ${cid} 的商店页是空的，用同名游戏 ${alt} 的资料`);
+      meta = { ...other, concept_id: cid };
+      break;
     }
   }
   // 这次没查成：不写缓存，过一会儿再查，免得一次网络抖动就把游戏记成「商店没有」
@@ -770,6 +827,12 @@ function warmUpPriorityCovers() {
 }
 
 const splitList = (s) => (s ? String(s).split(',').filter(Boolean) : []);
+function parseSiteMeta(s) {
+  try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+}
+export function siteCoverUrl(row) {
+  return parseSiteMeta(row?.site_meta).cover || '';
+}
 function parseJsonArray(s) {
   try { const v = JSON.parse(s || 'null'); return Array.isArray(v) ? v : null; } catch { return null; }
 }
@@ -798,12 +861,17 @@ export function enrichGameRow(row, storeMetaMap = null) {
   const autoName = cnTitle || sm?.name || cat?.name || fullTitle || serial || `帖子 #${row.post_id}`;
   const displayName = customName || autoName;
 
+  const site = parseSiteMeta(row.site_meta);
+  const siteCover = site.cover ? `/api/post-cover/${encodeURIComponent(row.source_id)}/${encodeURIComponent(row.post_id)}` : '';
+
   // Serve cover via /api/cover/:conceptId whenever conceptId > 0 and not known-missing
   // v 参数随缓存状态变化，封面下载完成后列表刷新会让前端重新加载图片
-  const coverUrl = conceptId > 0 && !coverFailed ? `/api/cover/${conceptId}?v=${hasCoverFile ? 1 : 0}` : (cat?.coverUrl || '');
+  const coverUrl = conceptId > 0 && !coverFailed ? `/api/cover/${conceptId}?v=${hasCoverFile ? 1 : 0}` : (cat?.coverUrl || siteCover);
+  const description = sm?.description || site.description || '';
 
   return {
     ...row,
+    site_meta: undefined,
     serial: serial || null,
     concept_id: conceptId || 0,
     platform,
@@ -817,10 +885,11 @@ export function enrichGameRow(row, storeMetaMap = null) {
     catalog_name: cat?.name || '',
     cover_url: coverUrl,
     has_cached_cover: hasCoverFile,
-    publisher: sm?.publisher || '',
+    publisher: sm?.publisher || site.publisher || '',
     genres: sm?.genres || '',
-    release_date: sm?.release_date || '',
-    description: sm?.description || '',
+    release_date: sm?.release_date || site.release_date || '',
+    description,
+    description_source: !description ? '' : sm?.description ? 'store' : 'site',
     rating: sm?.rating ?? null,
     rating_count: sm?.rating_count ?? null,
     rating_dist: parseJsonArray(sm?.rating_dist),
