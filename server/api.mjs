@@ -19,7 +19,7 @@ import { changeDestDir } from './destdir.mjs';
 import { panInventorySets, syncPanInventory, refreshIfStale } from './pan-inventory.mjs';
 import {
   allReviews, hasMatchableBad, shareMatches, ensureShareFiles, badReviewOfLink, serialsOf, reviewsOfSerials,
-  gameReviewBrief, gameReviews, badGamesInPan, reviewStatus, syncReviews, refreshReviewsIfStale,
+  gameReviewBrief, gameReviews, badGamesInPan, reviewStatus, syncReviews, refreshReviewsIfStale, editReview, removeReview,
 } from './reviews.mjs';
 import { libraryPublishStatus, publishLibrary } from './library-publish.mjs';
 import { linkCheckStatus, checkLinks } from './link-check.mjs';
@@ -512,6 +512,17 @@ export default async function routes(app) {
   // ---------- 盘游评价 ----------
   app.get('/api/reviews', async () => reviewStatus());
   app.post('/api/reviews/sync', async () => { await syncReviews(); return reviewStatus(); });
+  app.post('/api/reviews/edit', async (req) => {
+    const { fingerprint, playable, note } = req.body || {};
+    if (!fingerprint) throw bad(400, '缺少评价');
+    await editReview(String(fingerprint), { playable: playable !== false, note });
+    return { ok: true };
+  });
+  app.post('/api/reviews/remove', async (req) => {
+    if (!req.body?.fingerprint) throw bad(400, '缺少评价');
+    await removeReview(String(req.body.fingerprint));
+    return { ok: true };
+  });
   // ---------- 盘游资源库 ----------
   const panplayLibrary = () => ({ publish: libraryPublishStatus(), links: linkCheckStatus(), plans: analyzeStatus(), feedback: feedbackState });
   app.get('/api/panplay-library', async () => panplayLibrary());

@@ -1,5 +1,6 @@
 // 盘游的评价：盘游把每台设备的评价写到网盘 /盘游/评价/<设备>.json，这里定时读回来。
 // 认同一份资源按主游戏各分卷的 md5：分享里看到的 md5 和转存后网盘里的一样，转存前就能认出来。
+import crypto from 'node:crypto';
 import { all, one, exec, tx } from './db.mjs';
 import * as bd from './baidu.mjs';
 import { bus } from './bus.mjs';
@@ -67,6 +68,56 @@ export function syncReviews() {
     .catch((e) => { syncState.error = e.message; console.warn(`盘游评价同步失败：${e.message}`); return false; })
     .finally(() => { running = null; });
   return running;
+}
+
+// ---------- 在盘架上改、删评价 ----------
+// 盘架也当一台设备，写自己的 /盘游/评价/<盘架的 ID>.json：改是一条新的评价，删是 removed 的墓碑，
+// 时间都比原来那条晚，盘游和盘架都以时间最新的为准（盘游 ADR 0006），各台盘游下次同步就跟着变。
+const DEVICE_KEY = '_review_device';
+const DEVICE_NAME = '盘架';
+
+function shelfDeviceId() {
+  const saved = one('SELECT value FROM settings WHERE key = ?', DEVICE_KEY)?.value;
+  if (saved) return JSON.parse(saved);
+  const id = crypto.randomBytes(8).toString('hex');
+  exec('INSERT INTO settings (key, value) VALUES (?, ?)', DEVICE_KEY, JSON.stringify(id));
+  return id;
+}
+
+const reviewEntry = (r) => ({
+  fingerprint: r.fingerprint, title_id: r.title_id || '', name: r.name || '', playable: !!r.playable, note: r.note || '',
+  firmware: r.firmware || '', format: r.format || '', at: r.at, ...(r.removed ? { removed: true } : {}),
+  parts: (() => { try { return JSON.parse(r.parts || '[]'); } catch { return []; } })(),
+});
+
+async function writeOwnReview(change) {
+  const latest = one('SELECT * FROM reviews WHERE fingerprint = ? ORDER BY at DESC, device_id DESC LIMIT 1', change.fingerprint);
+  if (!latest || latest.removed) throw Object.assign(new Error('这条评价已经不在了'), { statusCode: 404 });
+  const id = shelfDeviceId();
+  const row = {
+    ...latest, ...change, device_id: id, device_name: DEVICE_NAME,
+    at: Math.max(Math.floor(Date.now() / 1000), latest.at + 1),
+  };
+  const mine = all('SELECT * FROM reviews WHERE device_id = ? AND fingerprint != ?', id, row.fingerprint);
+  // 先传上网盘再记进数据库：传失败时数据库不动，下次同步也不会把改动冲掉
+  await bd.writeSmallFile(`${REVIEW_DIR}/${id}.json`, JSON.stringify({
+    version: 1, device: { id, name: DEVICE_NAME }, updated_at: Math.floor(Date.now() / 1000),
+    reviews: [...mine, row].map(reviewEntry),
+  }));
+  exec(`INSERT OR REPLACE INTO reviews (fingerprint, device_id, device_name, title_id, name, playable, note, firmware, at, removed, parts, format)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    row.fingerprint, id, DEVICE_NAME, row.title_id, row.name, row.playable ? 1 : 0, row.note, row.firmware, row.at, row.removed ? 1 : 0, row.parts, row.format);
+  index = null;
+  releaseClearedLinks();
+  bus.emit('reviews', { at: nowIso() });
+}
+
+export async function editReview(fingerprint, { playable, note }) {
+  await writeOwnReview({ fingerprint, playable: playable ? 1 : 0, note: String(note || '').trim().slice(0, 300), removed: 0 });
+}
+
+export async function removeReview(fingerprint) {
+  await writeOwnReview({ fingerprint, removed: 1 });
 }
 
 export function refreshReviewsIfStale(maxAgeMs = 5 * 60_000) {

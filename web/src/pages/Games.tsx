@@ -22,6 +22,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Pencil,
 } from 'lucide-react';
 import { api, type BlockedAdd, type FormatState, type Game, type GameFormat, type GameLink, type GameReview, type Job, type PanFolder, type PanState, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
 import { useAccount, useSetup, useSources } from '../lib/hooks';
@@ -1333,7 +1334,8 @@ function GameDrawer({
           </section>
 
           {!!game.reviews?.length && (
-            <ReviewSection reviews={game.reviews} links={game.links} checking={checkReviews.isPending} checkErrors={checkReviews.data?.errors || []} />
+            <ReviewSection reviews={game.reviews} links={game.links} checking={checkReviews.isPending} checkErrors={checkReviews.data?.errors || []}
+              onChanged={() => { detail.refetch(); onUpdated(); }} />
           )}
 
           {/* 游戏介绍与规格 */}
@@ -1685,8 +1687,20 @@ function reviewTag(r: GameReview, links: GameLink[]): { label: string; title: st
   return { label: label || '这份', title: `${MATCH_LABEL.this}${label ? `（${label}）` : ''}` };
 }
 
-function ReviewSection({ reviews, links, checking, checkErrors }: { reviews: GameReview[]; links: GameLink[]; checking: boolean; checkErrors: string[] }) {
+// 改、删评价：盘架写自己的那份评价文件，时间比原来的晚，各台盘游同步后都跟着变
+function ReviewSection({ reviews, links, checking, checkErrors, onChanged }: { reviews: GameReview[]; links: GameLink[]; checking: boolean; checkErrors: string[]; onChanged: () => void }) {
   const unknown = reviews.some(r => r.match === 'unknown');
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ playable: true, note: '' });
+  const save = useMutation({
+    mutationFn: (fingerprint: string) => api.post('/reviews/edit', { fingerprint, ...draft }),
+    onSuccess: () => { setEditing(null); onChanged(); },
+  });
+  const remove = useMutation({
+    mutationFn: (fingerprint: string) => api.post('/reviews/remove', { fingerprint }),
+    onSuccess: onChanged,
+  });
+  const busy = save.isPending || remove.isPending;
   return (
     <section className="intro">
       <h3 className="intro-title">盘游评价</h3>
@@ -1695,21 +1709,41 @@ function ReviewSection({ reviews, links, checking, checkErrors }: { reviews: Gam
           const tag = reviewTag(r, links);
           const detail = [r.note, r.firmware && `固件 ${r.firmware}`, r.match !== 'this' && r.name && `评的是「${r.name}」`].filter(Boolean).join(' · ');
           return (
-            <div
-              key={r.fingerprint}
-              className={cx('review-item flex items-center gap-2', r.playable ? 'ok' : 'bad', r.match === 'other' && 'other')}
-              title={[`${r.playable ? '能正常玩' : '不能玩'}（${tag.title}）`, detail, reviewWhere(r)].filter(Boolean).join('\n')}
-            >
-              <strong className="shrink-0">{r.playable ? '能玩' : '不能玩'}</strong>
-              <span className="review-match shrink-0">{tag.label}</span>
-              <span className="min-w-0 flex-1 truncate text-xs text-[#c3ccdb]">{detail}</span>
-              <span className="shrink-0 text-[11px] text-muted">
-                {r.device || '盘游'} {new Date(r.at * 1000).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
-              </span>
+            <div key={r.fingerprint}>
+              <div
+                className={cx('review-item flex items-center gap-2', r.playable ? 'ok' : 'bad', r.match === 'other' && 'other')}
+                title={[`${r.playable ? '能正常玩' : '不能玩'}（${tag.title}）`, detail, reviewWhere(r)].filter(Boolean).join('\n')}
+              >
+                <strong className="shrink-0">{r.playable ? '能玩' : '不能玩'}</strong>
+                <span className="review-match shrink-0">{tag.label}</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-[#c3ccdb]">{detail}</span>
+                <span className="shrink-0 text-[11px] text-muted">
+                  {r.device || '盘游'} {new Date(r.at * 1000).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}
+                </span>
+                <button type="button" className="shrink-0 text-muted hover:text-ink disabled:opacity-40" title="修改这条评价" disabled={busy}
+                  onClick={() => { setDraft({ playable: r.playable, note: r.note || '' }); setEditing(editing === r.fingerprint ? null : r.fingerprint); }}>
+                  <Pencil size={13} />
+                </button>
+                <button type="button" className="shrink-0 text-muted hover:text-bad disabled:opacity-40" title="删除这条评价" disabled={busy}
+                  onClick={() => { if (window.confirm('删除这条评价？各台盘游同步后也会删掉。')) remove.mutate(r.fingerprint); }}>
+                  <Trash2 size={13} />
+                </button>
+              </div>
+              {editing === r.fingerprint && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[13px]">
+                  <button type="button" className={cx('btn btn-sm', draft.playable && 'btn-primary')} onClick={() => setDraft(d => ({ ...d, playable: true }))}>能玩</button>
+                  <button type="button" className={cx('btn btn-sm', !draft.playable && 'btn-danger')} onClick={() => setDraft(d => ({ ...d, playable: false }))}>不能玩</button>
+                  <input className="field min-w-0 flex-1" maxLength={300} placeholder="一句话说明（可不填）" value={draft.note}
+                    onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} />
+                  <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => save.mutate(r.fingerprint)}>保存</button>
+                  <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setEditing(null)}>取消</button>
+                </div>
+              )}
             </div>
           );
         })}
       </div>
+      <ErrorNote error={save.error || remove.error} />
       {unknown && (
         <p className="intro-empty">
           {checking
