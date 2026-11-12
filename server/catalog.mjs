@@ -301,17 +301,23 @@ export function initCatalog() {
     if (n) console.log(`[catalog] 重新查 ${n} 个之前记成「商店没有」的游戏`);
   }
 
-  // 3d. 上一版借同名游戏资料时没核对名字，可能借到了合集的商店页：名字对不上的清掉重新查
-  if (catalogLoaded && !one('SELECT value FROM settings WHERE key = ?', '_store_borrow_recheck_v1')) {
-    let n = 0;
-    for (const r of all('SELECT concept_id, name FROM store_meta WHERE found = 1')) {
-      if (!exactNorm(r.name) || !sameNameConcepts(r.concept_id).length || catalogNameIs(r.concept_id, r.name)) continue;
+  // 3d. 上一版借同名游戏资料时没核对名字（可能借到了合集的商店页），也没记借的是哪页：
+  // 名字对不上的清掉重新查；对得上的在后台重抓一遍资料，借来的记下来源
+  if (catalogLoaded && !one('SELECT value FROM settings WHERE key = ?', '_store_borrow_recheck_v2')) {
+    let cleared = 0, rechecked = 0;
+    for (const r of all('SELECT concept_id, name FROM store_meta WHERE found = 1 AND from_concept IS NULL')) {
+      if (!sameNameConcepts(r.concept_id).length) continue;
+      if (!exactNorm(r.name) || catalogNameIs(r.concept_id, r.name)) {
+        exec('UPDATE store_meta SET meta_ver = 0 WHERE concept_id = ?', r.concept_id);
+        rechecked++;
+        continue;
+      }
       exec('DELETE FROM store_meta WHERE concept_id = ?', r.concept_id);
       try { fs.unlinkSync(path.join(COVERS_DIR, `${r.concept_id}.img`)); } catch {}
-      n++;
+      cleared++;
     }
-    exec('INSERT INTO settings (key, value) VALUES (?, ?)', '_store_borrow_recheck_v1', JSON.stringify({ at: new Date().toISOString(), cleared: n }));
-    if (n) console.log(`[catalog] 重新查 ${n} 个商店资料名字和游戏对不上的`);
+    exec('INSERT INTO settings (key, value) VALUES (?, ?)', '_store_borrow_recheck_v2', JSON.stringify({ at: new Date().toISOString(), cleared, rechecked }));
+    if (cleared + rechecked) console.log(`[catalog] 商店资料可能借自同名游戏：${cleared} 个名字对不上的重新查，${rechecked} 个在后台核对`);
   }
 
   // 4. Kick off background warm-up for transferred / pending_transfer games first
@@ -661,7 +667,7 @@ function pumpQueue() {
 const STORE_COLS = [
   'concept_id', 'found', 'has_cover', 'locale', 'name', 'cover_url', 'publisher', 'genres', 'release_date', 'description', 'fetched_at',
   'rating', 'rating_count', 'rating_dist', 'screen_langs', 'spoken_langs', 'has_cn_sub', 'has_cn_voice', 'platforms', 'players',
-  'online_play', 'ps_plus_required', 'in_game_purchases', 'classification', 'edition', 'meta_ver',
+  'online_play', 'ps_plus_required', 'in_game_purchases', 'classification', 'edition', 'meta_ver', 'from_concept',
 ];
 const STORE_UPSERT = `INSERT OR REPLACE INTO store_meta (${STORE_COLS.join(', ')}) VALUES (${STORE_COLS.map(() => '?').join(', ')})`;
 
@@ -704,7 +710,7 @@ async function runFetchTask(conceptId, force = false, metaOnly = false) {
         continue;
       }
       console.log(`[catalog] ${cid} 的商店页是空的，用同名游戏 ${alt} 的资料`);
-      meta = { ...other, concept_id: cid };
+      meta = { ...other, concept_id: cid, from_concept: alt };
       break;
     }
   }
@@ -827,7 +833,7 @@ function warmUpPriorityCovers() {
 }
 
 const splitList = (s) => (s ? String(s).split(',').filter(Boolean) : []);
-function parseSiteMeta(s) {
+export function parseSiteMeta(s) {
   try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
 }
 export function siteCoverUrl(row) {

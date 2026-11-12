@@ -210,6 +210,8 @@ for (const [col, type] of [
   ['screen_langs', 'TEXT'], ['spoken_langs', 'TEXT'], ['has_cn_sub', 'INTEGER'], ['has_cn_voice', 'INTEGER'],
   ['platforms', 'TEXT'], ['players', 'INTEGER'], ['online_play', 'TEXT'], ['ps_plus_required', 'INTEGER'],
   ['in_game_purchases', 'INTEGER'], ['classification', 'TEXT'], ['edition', 'TEXT'], ['meta_ver', 'INTEGER NOT NULL DEFAULT 0'],
+  // 自己的商店页是空的、借了同名游戏那页时，那页的 conceptId；盘游按它查商店（资源库里的 store_concept_id）
+  ['from_concept', 'INTEGER'],
 ]) if (!storeCols.has(col)) db.exec(`ALTER TABLE store_meta ADD COLUMN ${col} ${type}`);
 
 const linkCols = new Set(all('PRAGMA table_info(links)').map(c => c.name));

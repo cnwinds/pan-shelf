@@ -5,7 +5,7 @@ import { all, one, exec } from './db.mjs';
 import * as bd from './baidu.mjs';
 import { bus } from './bus.mjs';
 import { listSources } from './sources.mjs';
-import { enrichGameRow } from './catalog.mjs';
+import { enrichGameRow, parseSiteMeta } from './catalog.mjs';
 import { classify, cmpVer, FORMAT_DIR } from './linkpick.mjs';
 import { linkFormat } from './layout.mjs';
 import { shareMatches } from './reviews.mjs';
@@ -50,8 +50,13 @@ function chooseLinks() {
     if (!TITLE_RE.test(titleId)) continue;
 
     let g = games.get(titleId);
-    if (!g) games.set(titleId, (g = { title_id: titleId, post: null, concept_id: 0, added_at: 0, byFormat: new Map() }));
+    if (!g) games.set(titleId, (g = { title_id: titleId, post: null, concept_id: 0, added_at: 0, byFormat: new Map(), site: null, site_post: 0 }));
     if (!g.post || Number(post.post_id) > Number(g.post.post_id)) g.post = post;
+    const site = parseSiteMeta(post.site_meta);
+    if ((site.cover || site.description) && Number(post.post_id) > g.site_post) {
+      g.site = site;
+      g.site_post = Number(post.post_id);
+    }
     if (!g.concept_id && e.concept_id) g.concept_id = e.concept_id;
     g.added_at = Math.max(g.added_at, unix(post.discovered_at));
     const cand = { ...l, format, version, firmware };
@@ -70,15 +75,34 @@ export function libraryLinks() {
   })));
 }
 
+// 商店资料借自同名游戏时告诉盘游借的是哪页（store_concept_id），商店里没有介绍时带上帖子里的资料（info），
+// 盘游和盘架显示的一样。介绍截短些，资源库盘游每次都要整份读
+function storeFields(sm, site) {
+  const out = {};
+  if (sm?.found && sm.from_concept) out.store_concept_id = sm.from_concept;
+  if (site && !(sm?.found && sm.has_desc)) {
+    const info = {};
+    if (site.cover) info.cover = site.cover;
+    if (site.description) info.description = site.description.slice(0, 1500);
+    if (site.publisher) info.publisher = site.publisher;
+    if (site.release_date) info.release_date = site.release_date;
+    out.info = info;
+  }
+  return out;
+}
+
 export function buildLibrary() {
   const { games, enriched } = chooseLinks();
   const chosen = [...games.values()].flatMap(g => [...g.byFormat.values()]);
   const matches = shareMatches(chosen.map(l => l.surl));
   const plans = new Map(all(`SELECT surl, plan FROM link_plans WHERE status IN ('ok', 'queued') AND plan IS NOT NULL AND uploaded_rev >= rev`)
     .map(p => [p.surl, p.plan]));
+  const store = new Map(all(`SELECT concept_id, found, from_concept, COALESCE(description, '') != '' AS has_desc FROM store_meta`)
+    .map(r => [r.concept_id, r]));
   const out = [...games.values()].map(g => ({
     title_id: g.title_id,
     concept_id: g.concept_id || 0,
+    ...storeFields(store.get(g.concept_id), g.site),
     name: enriched.get(g.post).display_name,
     added_at: g.added_at,
     variants: Object.keys(FORMAT_DIR).filter(f => g.byFormat.has(f)).map(f => {
