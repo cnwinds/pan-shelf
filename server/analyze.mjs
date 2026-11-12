@@ -106,6 +106,12 @@ function userPrompt(link, files, texts, remarks, feedback) {
   return lines.filter(Boolean).join('\n\n');
 }
 
+// 大文件多的游戏给模型的内容长，flash 一类的模型忙的时候几分钟才回
+const LLM_TIMEOUT_SEC = 300;
+// 过一会儿再试多半就好的错（超时、网络、限流），分析器会按 RETRY_AFTER_MIN 自动重试
+const transient = (message) => Object.assign(new Error(message), { transient: true });
+const isTimeout = (e) => e?.name === 'TimeoutError' || e?.name === 'AbortError' || /timeout|timed out/i.test(String(e?.message || e));
+
 async function chat(messages) {
   const { base_url, api_key, model } = getSettings().llm;
   const url = base_url.replace(/\/+$/, '') + '/chat/completions';
@@ -113,13 +119,23 @@ async function chat(messages) {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...(api_key ? { authorization: `Bearer ${api_key}` } : {}) },
     body: JSON.stringify({ model, messages, temperature: 0, ...(json ? { response_format: { type: 'json_object' } } : {}) }),
-    signal: AbortSignal.timeout(180_000),
+    signal: AbortSignal.timeout(LLM_TIMEOUT_SEC * 1000),
   });
-  let r = await send(true);
-  // 有的接口不认 response_format，去掉再试
-  if (r.status === 400) r = await send(false);
-  if (!r.ok) throw new Error(`大模型接口返回 HTTP ${r.status}：${(await r.text()).slice(0, 200)}`);
-  const j = await r.json();
+  let r, j;
+  try {
+    r = await send(true);
+    // 有的接口不认 response_format，去掉再试
+    if (r.status === 400) r = await send(false);
+    if (!r.ok) {
+      const message = `大模型接口返回 HTTP ${r.status}：${(await r.text()).slice(0, 200)}`;
+      // 限流、服务端出错过一会儿多半就好了；别的（密钥错、模型名错）再试也一样
+      throw Object.assign(new Error(message), { transient: r.status === 429 || r.status >= 500 });
+    }
+    j = await r.json();
+  } catch (e) {
+    if (e.transient !== undefined || e instanceof SyntaxError) throw e;
+    throw transient(isTimeout(e) ? `大模型接口 ${LLM_TIMEOUT_SEC / 60} 分钟没有回应` : `连不上大模型接口：${e.cause?.code || e.message}`);
+  }
   const text = String(j.choices?.[0]?.message?.content || '').trim();
   const body = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
   try {
@@ -175,19 +191,39 @@ function savePlan(surl, fields) {
     surl, fields.rev ?? (prev?.rev || 0), fields.status, fields.plan ?? null, fields.share_sig ?? null, fields.model ?? null, fields.error ?? null, nowIso());
 }
 
+// 失败后多久自动再试：超时、网络、限流这类按次数拉长间隔，最多试 MAX_AUTO_RETRIES 次；
+// 模型的回答不合格的隔一小时再给一次机会；链接失效、分享是空的不再自动试
+const RETRY_AFTER_MIN = [10, 60, 360, 1440];
+const MAX_AUTO_RETRIES = 5;
+const ANSWER_RETRY_MIN = 60;
+
+export function recordFailure(surl, fields, kind) {
+  const count = (one('SELECT fail_count FROM link_plans WHERE surl = ?', surl)?.fail_count || 0) + 1;
+  let wait = null;
+  if (kind === 'transient' && count <= MAX_AUTO_RETRIES) wait = RETRY_AFTER_MIN[Math.min(count, RETRY_AFTER_MIN.length) - 1];
+  if (kind === 'answer' && count < 2) wait = ANSWER_RETRY_MIN;
+  const when = wait == null ? '' : wait < 60 ? `${wait} 分钟` : `${wait / 60} 小时`;
+  const error = `${fields.error}（第 ${count} 次${wait == null ? (kind === 'final' ? '' : '，不再自动重试') : `，${when}后自动再试`}）`;
+  savePlan(surl, { ...fields, status: 'failed', error });
+  exec('UPDATE link_plans SET fail_count = ?, retry_at = ? WHERE surl = ?', count,
+    wait == null ? null : new Date(Date.now() + wait * 60_000).toISOString(), surl);
+}
+
+const readable = (message) => (isTimeout(message) ? '超时' : message);
+
 // 分析一条链接。feedback 是盘游反馈的问题（重新分析时）
 export async function analyzeLink(link, { feedback = [], log = console.log } = {}) {
   const r = await bd.listShare(link.surl, link.pwd);
   if (r.error) {
     if (r.invalid) recordDead(link, r.error);
-    savePlan(link.surl, { status: 'failed', error: `列分享失败：${r.error}` });
+    recordFailure(link.surl, { error: `列分享失败：${readable(r.error)}` }, r.invalid ? 'final' : 'transient');
     return false;
   }
   recordAlive(link, r.files);
   const sig = shareSignature(r.files);
   const files = stripWrapper(r.files).sort((a, b) => naturalCompare(a.path, b.path));
   if (!files.length) {
-    savePlan(link.surl, { status: 'failed', share_sig: sig, error: '分享是空的' });
+    recordFailure(link.surl, { share_sig: sig, error: '分享是空的' }, 'final');
     return false;
   }
   const texts = await readTexts(link, files, log);
@@ -195,23 +231,24 @@ export async function analyzeLink(link, { feedback = [], log = console.log } = {
     .map(x => x.remark).filter(Boolean);
   const { model } = getSettings().llm;
   const messages = [{ role: 'system', content: SYSTEM }, { role: 'user', content: userPrompt(link, files, texts, remarks, feedback) }];
-  let plan = null, lastError = '';
+  let plan = null, lastError = '', kind = 'answer';
   for (let attempt = 0; attempt < 2 && !plan; attempt++) {
     try {
       const answer = await chat(messages);
       try {
         plan = toPlan(answer, files);
       } catch (e) {
-        lastError = e.message;
+        lastError = `大模型的回答不合格：${e.message}`;
         messages.push({ role: 'assistant', content: JSON.stringify(answer) }, { role: 'user', content: `这个回答有问题：${e.message}。请改正后重新给出完整的 JSON。` });
       }
     } catch (e) {
       lastError = e.message;
+      kind = e.transient ? 'transient' : e.transient === false ? 'final' : 'answer';
       break;
     }
   }
   if (!plan) {
-    savePlan(link.surl, { status: 'failed', share_sig: sig, model, error: lastError });
+    recordFailure(link.surl, { share_sig: sig, model, error: lastError }, kind);
     log(`编排分析失败：${link.name} ${link.format}（${lastError}）`);
     return false;
   }
@@ -219,19 +256,26 @@ export async function analyzeLink(link, { feedback = [], log = console.log } = {
   const { reason, ...rest } = plan;
   const published = { rev, model, at: Math.floor(Date.now() / 1000), ...rest };
   savePlan(link.surl, { rev, status: 'ok', plan: JSON.stringify(published), share_sig: sig, model, error: null });
+  exec('UPDATE link_plans SET fail_count = 0, retry_at = NULL WHERE surl = ?', link.surl);
   exec(`UPDATE feedback SET handled_at = ? WHERE surl = ? AND handled_at IS NULL`, nowIso(), link.surl);
   log(`编排：${link.name} ${link.format} 第 ${rev} 版，主游戏 ${rest.layers[0].files.length} 卷，补丁 ${rest.layers.length - 1} 组，放文件 ${rest.copies.length} 个${reason ? `（${reason}）` : ''}`);
   return true;
 }
 
-// 下一条要分析的：盘游反馈过问题的、还没分析过的、分享变了的
+// 下一条要分析的：盘游反馈过问题的、还没分析过的、失败了到点该重试的、分享变了的
 function nextLink(skip) {
-  const plans = new Map(all('SELECT surl, status, share_sig FROM link_plans').map(p => [p.surl, p]));
+  const plans = new Map(all('SELECT surl, status, share_sig, retry_at FROM link_plans').map(p => [p.surl, p]));
   const links = libraryLinks().filter(l => !l.dead && !skip.has(l.surl));
   const queued = links.find(l => plans.get(l.surl)?.status === 'queued');
   if (queued) return queued;
   const fresh = links.find(l => !plans.has(l.surl));
   if (fresh) return fresh;
+  const now = nowIso();
+  const due = links.find(l => {
+    const p = plans.get(l.surl);
+    return p?.status === 'failed' && p.retry_at && p.retry_at <= now;
+  });
+  if (due) return due;
   return links.find(l => {
     const p = plans.get(l.surl);
     if (!p?.share_sig || p.status === 'failed') return false;
@@ -259,7 +303,7 @@ export function runAnalyzer() {
         } catch (e) {
           analyzeState.failed++;
           analyzeState.error = e.message;
-          savePlan(link.surl, { status: 'failed', error: e.message });
+          recordFailure(link.surl, { error: readable(e.message) }, 'transient');
         }
         bus.emit('plans', { surl: link.surl });
         await sleep(getSettings().llm.interval_sec * 1000);
@@ -331,6 +375,8 @@ export async function testLlm() {
 }
 
 export function startAnalyzer() {
+  // 有自动重试之前因为超时失败的，排上重试
+  exec(`UPDATE link_plans SET retry_at = ? WHERE status = 'failed' AND retry_at IS NULL AND fail_count = 0 AND error LIKE '%timeout%'`, nowIso());
   setTimeout(runAnalyzer, 90_000);
   setInterval(runAnalyzer, CHECK_EVERY_MS);
   bus.on('links_checked', () => runAnalyzer());
