@@ -120,6 +120,7 @@ export function buildLibrary() {
         // 只放摘要，分卷清单在 /盘游/编排/<编号>/<surl>.json，盘游装的时候才去取
         const p = JSON.parse(plans.get(l.surl));
         v.plan = { rev: p.rev, size: p.size, layers: p.layers.map(x => x.name), copies: p.copies.length, notes: p.notes };
+        if (p.packages?.length) v.plan.packages = p.packages.length;
         if (p.size) v.size = p.size;
       }
       return v;

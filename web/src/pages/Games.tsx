@@ -689,7 +689,8 @@ function AddFormatsDialog({ count, formats, busy, onClose, onConfirm }: {
 
 // 装法一句话：主游戏 + 各补丁的名字，再加要放几个文件
 const planBrief = (plan: InstallPlan) =>
-  [plan.layers.map((l, i) => (i === 0 ? '主游戏' : l.name || `补丁 ${i}`)).join(' + '), plan.copies.length > 0 && `放 ${plan.copies.length} 个文件`]
+  [plan.layers.map((l, i) => (i === 0 ? '主游戏' : l.name || `补丁 ${i}`)).join(' + '), plan.copies.length > 0 && `放 ${plan.copies.length} 个文件`,
+    !!plan.packages?.length && `主机上装 ${plan.packages.length} 个包`]
     .filter(Boolean).join(' · ');
 
 // 每种格式一行：格式、版本、固件、大小，后面跟着盘架排的装法（点开看具体文件）；要用户自己做的步骤另起一行。
@@ -1746,6 +1747,12 @@ function PlanFiles({ lp }: { lp: LinkPlan }) {
         <div key={`c${i}`} className="flex gap-2">
           <span className="shrink-0 text-muted">放文件</span>
           <span className="min-w-0 break-all font-mono text-ink-2">{c.from.path} → {c.to}</span>
+        </div>
+      ))}
+      {(p.packages || []).map((f, i) => (
+        <div key={`p${i}`} className="flex gap-2">
+          <span className="shrink-0 text-muted">主机上装</span>
+          <span className="min-w-0 break-all font-mono text-ink-2">{f.path}（{bytes(f.size)}）</span>
         </div>
       ))}
       <div className="text-muted">

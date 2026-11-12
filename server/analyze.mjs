@@ -15,6 +15,8 @@ const TEXT_RE = /\.(txt|md|nfo|url|ini|json|html?|cfg)$/i;
 const ARCHIVE_RE = /\.(rar|zip|7z)$|\.(7z|zip)\.\d{3}$|\.z\d{2}$|\.r\d{2}$/i;
 const MAX_TEXT_BYTES = 256 * 1024;
 const MAX_TEXT_FILES = 10;
+// 编排里要在主机上安装的包只收激活、解锁用的小包（盘游的上限一样），整款游戏的 PKG 不收
+const MAX_PACKAGE_BYTES = 32 << 20;
 const MAX_TEXT_CHARS = 8000;
 const CHECK_EVERY_MS = 2 * 60_000;
 
@@ -85,13 +87,14 @@ async function readTexts(link, files, log) {
 
 const SYSTEM = `你在帮一个 PS5 游戏安装器整理网盘分享里的游戏资源。安装器会把压缩包边下载边解压到主机上这款游戏的目录（有 sce_sys 的那层是游戏根目录），然后按你排的顺序叠补丁、放文件。
 只回一个 JSON 对象，不要别的文字：
-{"main":[序号...],"patches":[{"name":"简短名称","files":[序号...]}],"copies":[{"file":序号,"to":"游戏根目录里的相对路径"}],"notes":["一句话"],"reason":"一句话说明你的判断"}
+{"main":[序号...],"patches":[{"name":"简短名称","files":[序号...]}],"copies":[{"file":序号,"to":"游戏根目录里的相对路径"}],"packages":[序号...],"notes":["一句话"],"reason":"一句话说明你的判断"}
 规则：
 - main：主游戏那一组压缩包的全部分卷（.rar / .partN.rar / .r00 / .zip / .z01 / .7z / .7z.001 等）。只能有一组，分卷一个都不能少，即使它们散在不同子目录里。
 - patches：按叠放顺序（先装的在前）列出补丁、更新、DLC、backport 等，每组是一个压缩包的全部分卷。跟这款游戏无关的（广告、别的游戏）、PKG 安装包不要放。没有就给空数组。
 - copies：不在压缩包里、需要放进游戏目录的单独文件（如 .sprx、.prx、eboot.bin）。to 相对游戏根目录，例如 fakelib/libSceAmpr.sprx；说明里要求覆盖哪个文件就写哪个。说明没要求的不要放。
+- packages：要在主机上安装才生效的小 PKG：激活完整版、解锁 DLC 的授权包（一般几 MB，常放在 DLC 目录里，名字或说明里写着激活、解锁、Crack、Unlock，说明会要求"安装 PKG 才能激活"）。安装器装好游戏后会自动安装它们。整款游戏、补丁的 PKG 安装包（几百 MB 到几十 GB）不要放。没有就给空数组。
 - notes：只写用户必须在主机上亲手做、安装器做不了的步骤，比如往游戏目录以外的地方放文件、必须用某个挂载工具或版本。每条一句简短中文，没有就给空数组。
-  不要写：已经由 main / patches / copies 处理了的事（比如"使用配套的 backport 补丁"）；资源本身的描述（有几种格式、版本号、大小、固件要求）；网站宣传、广告。
+  不要写：已经由 main / patches / copies / packages 处理了的事（比如"使用配套的 backport 补丁""安装 DLC 目录下的 PKG 激活"）；资源本身的描述（有几种格式、版本号、大小、固件要求）；网站宣传、广告。
 - 拿不准的不要编；序号只能用列表里有的。`;
 
 function userPrompt(link, files, texts, remarks, feedback) {
@@ -179,8 +182,14 @@ export function toPlan(answer, files) {
     if (!to) throw new Error(`${f.path} 要放的位置「${c?.to}」不是游戏目录里的相对路径`);
     return { from: { path: f.path, size: f.size, md5: f.md5 || '' }, to };
   });
+  const packages = (Array.isArray(answer?.packages) ? answer.packages : []).map(i => {
+    const f = pick(i, '要安装的包');
+    if (!/\.pkg$/i.test(f.path)) throw new Error(`${f.path} 不是 PKG，不能放进 packages`);
+    if (f.size > MAX_PACKAGE_BYTES) throw new Error(`${f.path} 有 ${Math.round(f.size / (1 << 20))} MB，不是激活、解锁用的小包，不能放进 packages`);
+    return { path: f.path, size: f.size, md5: f.md5 || '' };
+  });
   const notes = (Array.isArray(answer?.notes) ? answer.notes : []).map(n => String(n).trim().slice(0, 200)).filter(Boolean).slice(0, 8);
-  return { layers, copies, notes, size: files.reduce((n, f) => n + (f.size || 0), 0), reason: String(answer?.reason || '').slice(0, 300) };
+  return { layers, copies, packages, notes, size: files.reduce((n, f) => n + (f.size || 0), 0), reason: String(answer?.reason || '').slice(0, 300) };
 }
 
 function savePlan(surl, fields) {
@@ -258,7 +267,7 @@ export async function analyzeLink(link, { feedback = [], log = console.log } = {
   savePlan(link.surl, { rev, status: 'ok', plan: JSON.stringify(published), share_sig: sig, model, error: null });
   exec('UPDATE link_plans SET fail_count = 0, retry_at = NULL WHERE surl = ?', link.surl);
   exec(`UPDATE feedback SET handled_at = ? WHERE surl = ? AND handled_at IS NULL`, nowIso(), link.surl);
-  log(`编排：${link.name} ${link.format} 第 ${rev} 版，主游戏 ${rest.layers[0].files.length} 卷，补丁 ${rest.layers.length - 1} 组，放文件 ${rest.copies.length} 个${reason ? `（${reason}）` : ''}`);
+  log(`编排：${link.name} ${link.format} 第 ${rev} 版，主游戏 ${rest.layers[0].files.length} 卷，补丁 ${rest.layers.length - 1} 组，放文件 ${rest.copies.length} 个${rest.packages.length ? `，主机上装 ${rest.packages.length} 个包` : ''}${reason ? `（${reason}）` : ''}`);
   return true;
 }
 
@@ -377,6 +386,10 @@ export async function testLlm() {
 export function startAnalyzer() {
   // 有自动重试之前因为超时失败的，排上重试
   exec(`UPDATE link_plans SET retry_at = ? WHERE status = 'failed' AND retry_at IS NULL AND fail_count = 0 AND error LIKE '%timeout%'`, nowIso());
+  // 编排还没有 packages 那时排的：分享里有激活、解锁用的小 PKG 的重排一次，盘游才会自动装它
+  const repack = exec(`UPDATE link_plans SET status = 'queued' WHERE status = 'ok' AND plan NOT LIKE '%"packages"%'
+    AND EXISTS (SELECT 1 FROM share_files f WHERE f.surl = link_plans.surl AND LOWER(f.path) LIKE '%.pkg' AND f.size <= ?)`, MAX_PACKAGE_BYTES).changes;
+  if (repack) console.log(`[analyze] ${repack} 份编排的分享里有小 PKG，重新分析`);
   setTimeout(runAnalyzer, 90_000);
   setInterval(runAnalyzer, CHECK_EVERY_MS);
   bus.on('links_checked', () => runAnalyzer());

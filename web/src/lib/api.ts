@@ -121,6 +121,8 @@ export interface InstallPlan {
   rev: number; model: string; at: number; size: number;
   layers: { role: string; name: string; files: PlanFile[] }[];
   copies: { from: PlanFile; to: string }[];
+  /** 盘游装好游戏后在主机上安装的激活、解锁包；旧编排没有 */
+  packages?: PlanFile[];
   notes: string[];
 }
 export interface LinkPlan {
