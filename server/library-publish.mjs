@@ -74,7 +74,8 @@ export function buildLibrary() {
   const { games, enriched } = chooseLinks();
   const chosen = [...games.values()].flatMap(g => [...g.byFormat.values()]);
   const matches = shareMatches(chosen.map(l => l.surl));
-  const plans = new Map(all(`SELECT surl, plan FROM link_plans WHERE status IN ('ok', 'queued') AND plan IS NOT NULL`).map(p => [p.surl, p.plan]));
+  const plans = new Map(all(`SELECT surl, plan FROM link_plans WHERE status IN ('ok', 'queued') AND plan IS NOT NULL AND uploaded_rev >= rev`)
+    .map(p => [p.surl, p.plan]));
   const out = [...games.values()].map(g => ({
     title_id: g.title_id,
     concept_id: g.concept_id || 0,
@@ -92,15 +93,33 @@ export function buildLibrary() {
       const r = matches.get(l.surl)?.[0];
       if (r) v.review = { playable: r.playable, note: r.note, firmware: r.firmware, device: r.device, at: r.at };
       if (plans.has(l.surl)) {
-        v.plan = JSON.parse(plans.get(l.surl));
-        if (v.plan.size) v.size = v.plan.size;
+        // 只放摘要，分卷清单在 /盘游/编排/<编号>/<surl>.json，盘游装的时候才去取
+        const p = JSON.parse(plans.get(l.surl));
+        v.plan = { rev: p.rev, size: p.size, layers: p.layers.map(x => x.name), copies: p.copies.length, notes: p.notes };
+        if (p.size) v.size = p.size;
       }
       return v;
     }),
   })).sort((a, b) => b.added_at - a.added_at || a.title_id.localeCompare(b.title_id));
 
   const src = listSources().find(s => s.enabled) || listSources()[0];
-  return { version: 1, generated_at: Math.floor(Date.now() / 1000), library_dir: src?.dest_dir || '', games: out };
+  return { version: 2, generated_at: Math.floor(Date.now() / 1000), library_dir: src?.dest_dir || '', games: out };
+}
+
+// 编排的完整内容一条一个文件。先传这些、再发布资源库，资源库里有摘要的编排在网盘上一定找得到
+export const PLAN_DIR = `${LIBRARY_DIR}/编排`;
+async function uploadPlans() {
+  const titles = new Map(libraryLinks().map(l => [l.surl, l.title_id]));
+  const rows = all(`SELECT surl, rev, plan FROM link_plans WHERE status IN ('ok', 'queued') AND plan IS NOT NULL AND uploaded_rev < rev`);
+  let uploaded = 0;
+  for (const row of rows) {
+    const title = titles.get(row.surl);
+    if (!title) continue;
+    await bd.writeSmallFile(`${PLAN_DIR}/${title}/${row.surl}.json`, row.plan);
+    exec('UPDATE link_plans SET uploaded_rev = ? WHERE surl = ?', row.rev, row.surl);
+    uploaded++;
+  }
+  if (uploaded) console.log(`已上传 ${uploaded} 份编排到 ${PLAN_DIR}`);
 }
 
 const loadState = () => JSON.parse(one('SELECT value FROM settings WHERE key = ?', KEY)?.value || '{}');
@@ -113,6 +132,7 @@ let timer = null;
 export function publishLibrary({ force = false } = {}) {
   if (running) return running;
   running = (async () => {
+    await uploadPlans();
     const doc = buildLibrary();
     // 一个游戏都没有多半是数据出了问题，不拿空文件覆盖盘游正在用的那份
     if (!doc.games.length) throw new Error('没有可发布的游戏（需要有游戏编号、并且有 exFAT / 文件夹 / 未标注格式的链接）');

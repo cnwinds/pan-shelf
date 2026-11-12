@@ -225,6 +225,9 @@ if (!linkCols.has('allow_bad')) db.exec('ALTER TABLE links ADD COLUMN allow_bad 
 if (!linkCols.has('checked_at')) db.exec('ALTER TABLE links ADD COLUMN checked_at TEXT');
 if (!linkCols.has('alive')) db.exec('ALTER TABLE links ADD COLUMN alive INTEGER');
 if (!linkCols.has('share_size')) db.exec('ALTER TABLE links ADD COLUMN share_size INTEGER');
+// 编排的完整内容传到网盘 /盘游/编排/ 的是第几版；资源库只写已经传上去的那版的摘要
+const planCols = new Set(all('PRAGMA table_info(link_plans)').map(c => c.name));
+if (!planCols.has('uploaded_rev')) db.exec('ALTER TABLE link_plans ADD COLUMN uploaded_rev INTEGER NOT NULL DEFAULT 0');
 // 盘游评价时装的是哪种格式（exfat / folder），旧评价为空
 const reviewCols = new Set(all('PRAGMA table_info(reviews)').map(c => c.name));
 if (!reviewCols.has('format')) db.exec('ALTER TABLE reviews ADD COLUMN format TEXT');
