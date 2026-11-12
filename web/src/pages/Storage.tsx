@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Folder, File, ScanSearch, RefreshCw, FolderInput, Merge, Trash2, PencilLine, CircleCheck, CircleAlert, FolderTree, Sparkles } from 'lucide-react';
-import { api, type DuRow, type InPanBadGame, type NormalizePlan, type PanplayLibraryStatus, type ReviewStatus, type Source } from '../lib/api';
-import { RemoveDialog } from './Games';
+import { api, type DuRow, type InPanBadGame, type NormalizePlan, type PanplayLibraryStatus, type RecentPlan, type ReviewStatus, type Source } from '../lib/api';
+import { PlanSummary, RemoveDialog } from './Games';
 import { useAccount, useOverview, useSources, useStartJob } from '../lib/hooks';
 import { JobCard } from '../components/JobCard';
 import { Bar, Chip, Empty, ErrorNote, PageHeader, cx } from '../components/ui';
@@ -181,7 +181,47 @@ function PanplayLibraryPanel() {
         </div>
       </div>
       <ErrorNote error={status.error || publish.error || check.error || analyze.error} />
+      {a && (a.ok > 0 || a.failed > 0) && <RecentPlans running={a.running} done={a.ok + a.failed} />}
     </section>
+  );
+}
+
+const PLAN_FORMAT: Record<string, string> = { exfat: 'exFAT', folder: '文件夹', unknown: '未标注' };
+
+// 最近分析出来的编排：点开看内容，点名字到游戏库打开那个游戏
+function RecentPlans({ running, done }: { running: boolean; done: number }) {
+  const recent = useQuery({
+    queryKey: ['recent-plans', done],
+    queryFn: () => api.get<{ plans: RecentPlan[] }>('/panplay-library/plans?limit=30'),
+    refetchInterval: running ? 15_000 : false,
+  });
+  const list = recent.data?.plans || [];
+  return (
+    <details className="mt-4 rounded-lg border border-line-2">
+      <summary className="cursor-pointer px-4 py-2.5 text-[13px]">最近分析的 {list.length} 条（点开看编排）</summary>
+      <div className="divide-y divide-line-2">
+        {list.map(p => {
+          const plan = p.plan;
+          const brief = plan
+            ? [`主游戏 ${plan.layers[0]?.files.length || 0} 卷`, plan.layers.length > 1 && `补丁 ${plan.layers.length - 1} 组`,
+               plan.copies.length > 0 && `放 ${plan.copies.length} 个文件`, plan.notes.length > 0 && `提醒 ${plan.notes.length} 条`].filter(Boolean).join(' · ')
+            : `失败：${p.error || '原因不明'}`;
+          return (
+            <details key={p.surl} className="px-4 py-2 text-[13px]">
+              <summary className="flex cursor-pointer items-center gap-2">
+                <Link to={`/games?game=${encodeURIComponent(p.post_id)}&source=${encodeURIComponent(p.source_id)}`} className="min-w-0 truncate font-medium hover:underline"
+                  onClick={e => e.stopPropagation()}>{p.title}</Link>
+                <span className="shrink-0 text-xs text-muted">{PLAN_FORMAT[p.format || ''] || p.format || ''}</span>
+                <span className={cx('min-w-0 flex-1 truncate text-xs', plan ? 'text-muted' : 'text-warn')}>{brief}</span>
+                {p.analyzed_at && <span className="shrink-0 text-[11px] text-muted">{dateTime(p.analyzed_at)}</span>}
+              </summary>
+              <div className="mt-2 pl-1"><PlanSummary lp={p} /></div>
+            </details>
+          );
+        })}
+      </div>
+      <ErrorNote error={recent.error} />
+    </details>
   );
 }
 

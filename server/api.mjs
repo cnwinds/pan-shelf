@@ -23,7 +23,7 @@ import {
 } from './reviews.mjs';
 import { libraryPublishStatus, publishLibrary } from './library-publish.mjs';
 import { linkCheckStatus, checkLinks } from './link-check.mjs';
-import { analyzeStatus, retryFailed, testLlm } from './analyze.mjs';
+import { analyzeStatus, retryFailed, testLlm, plansOfLinks, recentPlans, queueReanalysis } from './analyze.mjs';
 import { feedbackState, syncFeedback } from './feedback.mjs';
 
 const bad = (code, msg) => Object.assign(new Error(msg), { statusCode: code });
@@ -217,7 +217,8 @@ async function gameDetail(source_id, row, enriched) {
   const pan_folders = pan_state === 'in_pan' && src?.dest_dir ? panFolders(await findPanItems(src, row, enriched.serial, links), links) : [];
   const pan_paths = pan_folders.map(f => f.path);
   const reviews = gameReviews(row, enriched.serial, links);
-  return { ...enriched, pan_state, pan_size, pan_paths, pan_folders, links, formats: formatStates(links), reviews: reviews.items, reviews_checked: reviews.checked };
+  return { ...enriched, pan_state, pan_size, pan_paths, pan_folders, links, formats: formatStates(links), reviews: reviews.items, reviews_checked: reviews.checked,
+    plans: plansOfLinks(links.map(l => l.surl)) };
 }
 
 // 游戏库里已入盘却还不知道大小的游戏，后台逐个统计网盘目录大小；每统计完一个推送 pan_inventory 让页面刷新。
@@ -527,6 +528,12 @@ export default async function routes(app) {
   const panplayLibrary = () => ({ publish: libraryPublishStatus(), links: linkCheckStatus(), plans: analyzeStatus(), feedback: feedbackState });
   app.get('/api/panplay-library', async () => panplayLibrary());
   app.post('/api/panplay-library/analyze', async () => { retryFailed(); syncFeedback(); return panplayLibrary(); });
+  app.get('/api/panplay-library/plans', async (req) => ({ plans: recentPlans(Math.min(Number(req.query.limit) || 30, 200)) }));
+  app.post('/api/panplay-library/reanalyze', async (req) => {
+    if (!req.body?.surl) throw bad(400, '缺少链接');
+    queueReanalysis(String(req.body.surl));
+    return { ok: true };
+  });
   app.post('/api/llm/test', async () => {
     try {
       return { ok: await testLlm() };

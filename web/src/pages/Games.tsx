@@ -24,7 +24,7 @@ import {
   ChevronsRight,
   Pencil,
 } from 'lucide-react';
-import { api, type BlockedAdd, type FormatState, type Game, type GameFormat, type GameLink, type GameReview, type Job, type PanFolder, type PanState, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
+import { api, type BlockedAdd, type FormatState, type Game, type GameFormat, type GameLink, type GameReview, type Job, type LinkPlan, type PanFolder, type PanState, type PlanFile, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
 import { useAccount, useSetup, useSources } from '../lib/hooks';
 import { Dropdown } from '../components/Dropdown';
 import { Chip, Empty, ErrorNote, Modal, cx, linkStatus } from '../components/ui';
@@ -186,7 +186,8 @@ export function Games() {
 
   const [batchMode, setBatchMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [activePostId, setActivePostId] = useState<string | null>(null);
+  // ?game=<帖子编号> 打开时直接打开这个游戏的详情（网盘页的编排列表点过来）
+  const [activePostId, setActivePostId] = useState<string | null>(() => sp.get('game'));
   const [removing, setRemoving] = useState<string[] | null>(null);
   const [removeFormats, setRemoveFormats] = useState<GameFormat[] | undefined>(undefined);
   const [addingBatch, setAddingBatch] = useState(false);
@@ -1338,6 +1339,10 @@ function GameDrawer({
               onChanged={() => { detail.refetch(); onUpdated(); }} />
           )}
 
+          {game.plans && Object.keys(game.plans).length > 0 && (
+            <PlanSection game={game} onChanged={() => detail.refetch()} />
+          )}
+
           {/* 游戏介绍与规格 */}
           {(Number(game.concept_id) > 0 || game.description) && (
             <section className="intro">
@@ -1685,6 +1690,68 @@ function reviewTag(r: GameReview, links: GameLink[]): { label: string; title: st
   const fmt = links.find(l => l.surl === r.surl)?.format;
   const label = fmt && fmt !== 'unknown' ? FORMAT_LABELS[fmt]?.label : null;
   return { label: label || '这份', title: `${MATCH_LABEL.this}${label ? `（${label}）` : ''}` };
+}
+
+// 一份安装编排（盘游 ADR 0012）：主游戏、补丁、要放的文件、要提醒的步骤
+export function PlanSummary({ lp }: { lp: LinkPlan }) {
+  const p = lp.plan;
+  if (!p) {
+    return <div className="text-xs text-muted">{lp.status === 'failed' ? <span className="text-warn">分析失败：{lp.error || '原因不明'}</span> : lp.status === 'queued' ? '等着分析…' : '还没分析'}</div>;
+  }
+  const files = (list: PlanFile[]) => {
+    const size = bytes(list.reduce((n, f) => n + (f.size || 0), 0));
+    return list.length > 2 ? `${list[0].path} … ${list[list.length - 1].path}（${list.length} 卷，${size}）` : `${list.map(f => f.path).join('、')}（${size}）`;
+  };
+  return (
+    <div className="space-y-1 text-xs">
+      {p.layers.map((l, i) => (
+        <div key={i}>
+          <span className="text-muted">{i === 0 ? '主游戏' : `补丁 ${i}${l.name ? `「${l.name}」` : ''}`}：</span>
+          <span className="break-all font-mono">{files(l.files)}</span>
+        </div>
+      ))}
+      {p.copies.map((c, i) => (
+        <div key={`c${i}`}><span className="text-muted">放进游戏目录：</span><span className="break-all font-mono">{c.from.path} → {c.to}</span></div>
+      ))}
+      {p.notes.map((n, i) => <div key={`n${i}`} className="text-warn">提醒用户：{n}</div>)}
+      <div className="text-muted">
+        第 {p.rev} 版 · {p.model} · {dateTime(new Date(p.at * 1000).toISOString())}
+        {lp.status === 'queued' && ' · 盘游反馈了问题，等重新分析'}
+        {lp.status === 'failed' && lp.error && ` · 上次重排失败：${lp.error}`}
+      </div>
+    </div>
+  );
+}
+
+function PlanSection({ game, onChanged }: { game: Game; onChanged: () => void }) {
+  const again = useMutation({
+    mutationFn: (surl: string) => api.post('/panplay-library/reanalyze', { surl }),
+    onSuccess: onChanged,
+  });
+  const entries = game.links.filter(l => game.plans?.[l.surl]);
+  return (
+    <section className="intro">
+      <h3 className="intro-title">安装编排</h3>
+      <div className="space-y-3">
+        {entries.map(l => {
+          const lp = game.plans![l.surl];
+          return (
+            <div key={l.surl}>
+              <div className="mb-1 flex items-center gap-2 text-[13px]">
+                <strong>{(l.format && FORMAT_LABELS[l.format]?.label) || '未标注'}</strong>
+                <span className="font-mono text-xs text-muted">{l.surl}</span>
+                <button type="button" className="btn btn-sm ml-auto" disabled={again.isPending || lp.status === 'queued'} onClick={() => again.mutate(l.surl)}>
+                  {lp.status === 'queued' ? '等重新分析' : '重新分析'}
+                </button>
+              </div>
+              <PlanSummary lp={lp} />
+            </div>
+          );
+        })}
+      </div>
+      <ErrorNote error={again.error} />
+    </section>
+  );
 }
 
 // 改、删评价：盘架写自己的那份评价文件，时间比原来的晚，各台盘游同步后都跟着变

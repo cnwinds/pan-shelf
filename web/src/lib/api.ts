@@ -116,6 +116,18 @@ export interface ReviewStatus {
   bad: number;
   devices: { id: string; name: string; count: number; bad: number }[];
 }
+export interface PlanFile { path: string; size: number; md5: string }
+export interface InstallPlan {
+  rev: number; model: string; at: number; size: number;
+  layers: { role: string; name: string; files: PlanFile[] }[];
+  copies: { from: PlanFile; to: string }[];
+  notes: string[];
+}
+export interface LinkPlan {
+  surl: string; rev: number; status: 'ok' | 'failed' | 'queued'; plan: InstallPlan | null;
+  error: string | null; model: string | null; analyzed_at: string | null;
+}
+export interface RecentPlan extends LinkPlan { format: GameFormat | null; source_id: string; post_id: string; title: string }
 export interface PanplayLibraryStatus {
   publish: { path: string; running: boolean; at?: string; checked_at?: string; count?: number; error?: string | null };
   links: { running: boolean; at: string | null; checked: number; dead: number; error: string | null; total: number; checked_total: number; dead_total: number };
@@ -177,6 +189,8 @@ export interface Game {
   review?: ReviewBrief | null;
   reviews?: GameReview[];
   reviews_checked?: boolean;
+  /** surl → 安装编排（盘游 ADR 0012），只在详情里有 */
+  plans?: Record<string, LinkPlan>;
 }
 
 /** 游戏在网盘里的一项（一般是编号目录）。size 为 null 表示还没统计过 */

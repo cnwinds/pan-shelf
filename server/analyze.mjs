@@ -7,6 +7,7 @@ import { bus } from './bus.mjs';
 import { getSettings } from './settings.mjs';
 import { libraryLinks } from './library-publish.mjs';
 import { recordAlive, recordDead } from './link-check.mjs';
+import { linkFormat } from './layout.mjs';
 import { nowIso, sleep } from './util.mjs';
 
 const TEMP_ROOT = '/盘架临时';
@@ -290,6 +291,30 @@ export function analyzeStatus() {
     total: libraryLinks().filter(l => !l.dead).length,
     recent_errors: all(`SELECT lp.surl, lp.error, lp.analyzed_at FROM link_plans lp WHERE status = 'failed' ORDER BY analyzed_at DESC LIMIT 5`),
   };
+}
+
+const planRow = (r) => ({
+  surl: r.surl, rev: r.rev, status: r.status, plan: r.plan ? JSON.parse(r.plan) : null,
+  error: r.error || null, model: r.model || null, analyzed_at: r.analyzed_at || null,
+});
+
+// 游戏详情里列出各条链接的编排
+export function plansOfLinks(surls) {
+  const out = {};
+  for (let i = 0; i < surls.length; i += 500) {
+    const chunk = surls.slice(i, i + 500);
+    for (const r of all(`SELECT * FROM link_plans WHERE surl IN (${chunk.map(() => '?').join(',')})`, ...chunk)) out[r.surl] = planRow(r);
+  }
+  return out;
+}
+
+// 最近分析过的，网盘页上看成果
+export function recentPlans(limit = 30) {
+  return all(`SELECT lp.*, l.format, l.remark, l.source_id, l.post_id, p.title, p.custom_name
+              FROM link_plans lp JOIN links l ON l.surl = lp.surl
+              JOIN posts p ON p.source_id = l.source_id AND p.post_id = l.post_id
+              WHERE lp.analyzed_at IS NOT NULL ORDER BY lp.analyzed_at DESC LIMIT ?`, limit)
+    .map(r => ({ ...planRow(r), format: linkFormat(r), source_id: r.source_id, post_id: r.post_id, title: r.custom_name || r.title || r.post_id }));
 }
 
 // 把失败的都放回去重新分析（换了模型、改了设置之后用）
