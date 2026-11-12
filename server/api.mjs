@@ -263,6 +263,17 @@ function computePanState(post, links, hasPanDir = false) {
   return 'no_link';
 }
 
+// 没入盘的游戏在格子上显示分享多大：按 exFAT、文件夹、未标注的顺序取第一种列过分享的链接，和盘游默认打开的格式一致
+const SIZE_ORDER = ['exfat', 'folder', 'unknown'];
+function shareSize(links) {
+  const usable = links.filter(l => l.status !== 'skipped' && l.status !== 'invalid' && Number(l.share_size) > 0);
+  const ranked = usable.sort((a, b) => {
+    const rank = (l) => { const i = SIZE_ORDER.indexOf(linkFormat(l)); return i < 0 ? SIZE_ORDER.length : i; };
+    return rank(a) - rank(b);
+  });
+  return ranked.length ? Number(ranked[0].share_size) : null;
+}
+
 function listGames(q) {
   const size = Math.min(Number(q.size) || 120, 2000);
   const page = Math.max(Number(q.page) || 1, 1);
@@ -282,7 +293,7 @@ function listGames(q) {
   }[q.sort] || 'CAST(p.post_id AS INTEGER) DESC';
   const rows = all(`SELECT p.* FROM posts p WHERE ${w} ORDER BY ${order} LIMIT ? OFFSET ?`, ...args, size, (page - 1) * size);
   const total = one(`SELECT COUNT(*) n FROM posts p WHERE ${w}`, ...args).n;
-  const linkStmt = 'SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid';
+  const linkStmt = 'SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format, share_size FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid';
 
   const conceptIds = [...new Set(rows.map(r => Number(r.concept_id || 0)).filter(c => c > 0))];
   const storeMetaMap = new Map();
@@ -306,7 +317,7 @@ function listGames(q) {
       const pan_size = matchPanSize(r, enriched.serial, inv);
       const pan_state = computePanState(r, links, pan_size !== null || inPanInventory(r, enriched.serial, inv));
       if (pan_state === 'in_pan' && pan_size === null) queuePanSize(r.source_id, String(r.post_id));
-      return { ...enriched, pan_state, pan_size, links, formats: formatStates(links), review: gameReviewBrief(r, enriched.serial, links, matches) };
+      return { ...enriched, pan_state, pan_size, share_size: shareSize(links), links, formats: formatStates(links), review: gameReviewBrief(r, enriched.serial, links, matches) };
     }),
   };
 }

@@ -38,8 +38,8 @@ const PRIMARY_FILTERS: { id: string; label: string }[] = [
 ];
 
 const SORT_OPTIONS = [
-  { value: 'pan_first', label: '已入盘优先' },
   { value: 'newest', label: '最新收录' },
+  { value: 'pan_first', label: '已入盘' },
   { value: 'updated', label: '最近更新' },
   { value: 'rating', label: '评分最高' },
   { value: 'release', label: '发售日期（新→旧）' },
@@ -175,7 +175,7 @@ export function Games() {
   const setup = useSetup();
   const sourceId = sp.get('source') || sources?.find(s => s.enabled)?.id || sources?.[0]?.id || '';
   const view = sp.get('view') || 'all';
-  const sort = sp.get('sort') || 'pan_first';
+  const sort = sp.get('sort') || 'newest';
   const page = Math.max(1, Number(sp.get('page') || 1));
   const q = sp.get('q') || '';
   const cnOnly = sp.get('cn') === '1';
@@ -405,7 +405,7 @@ export function Games() {
             align="right"
             icon={<ArrowUpDown size={13} />}
             value={sort}
-            onChange={v => updateParams({ sort: v === 'pan_first' ? null : v })}
+            onChange={v => updateParams({ sort: v === 'newest' ? null : v })}
             ariaLabel="排序方式"
             options={SORT_OPTIONS}
           />
@@ -850,7 +850,9 @@ function GameTile({
   const panState = getPanState(game);
   const isInPan = panState === 'in_pan';
   const isQueued = panState === 'queued';
-  const isDim = !isInPan && !isQueued;
+  // 容量角标：已入盘实心，没入盘空心；转存中、异常、待抓详情这些要处理的状态占着这个角就不显示
+  const size = isInPan ? game.pan_size || game.share_size : game.share_size;
+  const showOutlineSize = !isInPan && !isQueued && panState !== 'failed' && panState !== 'pending_detail' && !!size;
 
   const hue = hueFrom(game.serial || game.display_name || game.post_id);
   const [prefix, digits] = splitSerial(game.serial, game.post_id);
@@ -870,7 +872,6 @@ function GameTile({
         'tile',
         isInPan && 'is-in-pan',
         isQueued && 'is-queued',
-        isDim && 'is-dim',
         selected && 'is-selected'
       )}
       onClick={handleClick}
@@ -908,9 +909,10 @@ function GameTile({
 
         {isInPan && (
           <span className="corner done" title="已入盘">
-            {game.pan_size ? bytes(game.pan_size) : '已入盘'}
+            {size ? bytes(size) : '已入盘'}
           </span>
         )}
+        {showOutlineSize && <span className="corner size-outline" title="还没入盘，这是分享的大小">{bytes(size)}</span>}
         {isQueued && <span className="corner live">转存中</span>}
         {game.review && !batchMode && <TileReview r={game.review} />}
         {panState === 'failed' && <span className="corner err">异常</span>}

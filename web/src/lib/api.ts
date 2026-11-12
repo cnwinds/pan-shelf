@@ -183,6 +183,8 @@ export interface Game {
   meta_state?: 'ready' | 'pending' | 'missing';
   pan_state?: PanState;
   pan_size?: number | null;
+  /** 没入盘时按 exFAT、文件夹、未标注的顺序取第一种的分享大小，没列过分享时为空 */
+  share_size?: number | null;
   pan_paths?: string[];
   pan_folders?: PanFolder[];
   formats?: FormatState[];
