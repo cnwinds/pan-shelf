@@ -164,11 +164,17 @@ function PanplayLibraryPanel() {
           <button className="btn btn-sm" disabled={check.isPending || l?.running} onClick={() => check.mutate()}>
             <ScanSearch size={12} />检查链接
           </button>
-          {a?.ready && (
-            <button className="btn btn-sm" disabled={analyze.isPending || a.running} onClick={() => analyze.mutate()} title="分析还没排的，失败的也重来一遍">
-              <Sparkles size={12} />分析编排
-            </button>
-          )}
+          {a && (a.ready
+            ? (
+              <button className="btn btn-sm" disabled={analyze.isPending || a.running} onClick={() => analyze.mutate()} title="分析还没排的，失败的也重来一遍">
+                <Sparkles size={12} />分析编排
+              </button>
+            )
+            : (
+              <Link to="/settings/llm" className="btn btn-sm" title="先在设置里填大模型接口并打开分析">
+                <Sparkles size={12} />分析编排
+              </Link>
+            ))}
           <button className="btn btn-sm" disabled={publish.isPending || p?.running} onClick={() => publish.mutate()}>
             <RefreshCw size={12} className={cx((publish.isPending || p?.running) && 'animate-spin')} />立即发布
           </button>
