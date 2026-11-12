@@ -93,6 +93,7 @@ const SYSTEM = `你在帮一个 PS5 游戏安装器整理网盘分享里的游�
 - patches：按叠放顺序（先装的在前）列出补丁、更新、DLC、backport 等，每组是一个压缩包的全部分卷。跟这款游戏无关的（广告、别的游戏）、PKG 安装包不要放。没有就给空数组。
 - copies：不在压缩包里、需要放进游戏目录的单独文件（如 .sprx、.prx、eboot.bin）。to 相对游戏根目录，例如 fakelib/libSceAmpr.sprx；说明里要求覆盖哪个文件就写哪个。说明没要求的不要放。
 - packages：要在主机上安装才生效的小 PKG：激活完整版、解锁 DLC 的授权包（一般几 MB，常放在 DLC 目录里，名字或说明里写着激活、解锁、Crack、Unlock，说明会要求"安装 PKG 才能激活"）。安装器装好游戏后会自动安装它们。整款游戏、补丁的 PKG 安装包（几百 MB 到几十 GB）不要放。没有就给空数组。
+  说明里要求安装的激活 PKG 不在文件列表里（打包在压缩包里，比如在游戏目录的 DLC 文件夹下）时，安装器解压后会在游戏目录里自己找到并安装，packages 和 notes 都不用写。
 - notes：只写用户必须在主机上亲手做、安装器做不了的步骤，比如往游戏目录以外的地方放文件、必须用某个挂载工具或版本。每条一句简短中文，没有就给空数组。
   不要写：已经由 main / patches / copies / packages 处理了的事（比如"使用配套的 backport 补丁""安装 DLC 目录下的 PKG 激活"）；资源本身的描述（有几种格式、版本号、大小、固件要求）；网站宣传、广告。
 - 拿不准的不要编；序号只能用列表里有的。`;
@@ -390,6 +391,13 @@ export function startAnalyzer() {
   const repack = exec(`UPDATE link_plans SET status = 'queued' WHERE status = 'ok' AND plan NOT LIKE '%"packages"%'
     AND EXISTS (SELECT 1 FROM share_files f WHERE f.surl = link_plans.surl AND LOWER(f.path) LIKE '%.pkg' AND f.size <= ?)`, MAX_PACKAGE_BYTES).changes;
   if (repack) console.log(`[analyze] ${repack} 份编排的分享里有小 PKG，重新分析`);
+  // 激活 PKG 打包在压缩包里的，以前写成了「要手动安装」的说明；盘游现在会在游戏目录里找到自动装，重排一次去掉这条说明
+  if (!one('SELECT value FROM settings WHERE key = ?', '_repack_in_archive_pkg_v1')) {
+    const n = exec(`UPDATE link_plans SET status = 'queued' WHERE status = 'ok' AND plan LIKE '%"notes":[%PKG%'
+      AND (plan LIKE '%激活%' OR plan LIKE '%解锁%')`).changes;
+    exec('INSERT INTO settings (key, value) VALUES (?, ?)', '_repack_in_archive_pkg_v1', JSON.stringify({ at: nowIso(), queued: n }));
+    if (n) console.log(`[analyze] ${n} 份编排的说明里要手动装激活 PKG，重新分析`);
+  }
   setTimeout(runAnalyzer, 90_000);
   setInterval(runAnalyzer, CHECK_EVERY_MS);
   bus.on('links_checked', () => runAnalyzer());
