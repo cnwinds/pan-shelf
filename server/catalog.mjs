@@ -265,6 +265,13 @@ export function initCatalog() {
     });
   }
 
+  // 3c. 以前查商店没查成（超时、被拦）也记成了「商店没有」，清掉一次让它们重新查
+  if (!one('SELECT value FROM settings WHERE key = ?', '_store_missing_recheck_v1')) {
+    const n = exec('DELETE FROM store_meta WHERE found = 0').changes;
+    exec('INSERT INTO settings (key, value) VALUES (?, ?)', '_store_missing_recheck_v1', JSON.stringify({ at: new Date().toISOString(), cleared: n }));
+    if (n) console.log(`[catalog] 重新查 ${n} 个之前记成「商店没有」的游戏`);
+  }
+
   // 4. Kick off background warm-up for transferred / pending_transfer games first
   setTimeout(() => warmUpPriorityCovers(), 1500);
   setTimeout(() => backfillStoreMeta(), 30_000);
@@ -274,6 +281,15 @@ export function lookupCatalogBySerial(serial) {
   if (!catalogLoaded) return null;
   const sid = shortTitleId(serial);
   return (sid && byTitleId.get(sid)) || null;
+}
+
+// 两个编号在资料库里是不是同一款游戏：同一个 conceptId，或者去掉版本字样后英文名一样（不同区的版本 conceptId 常常不同）
+export function sameCatalogGame(a, b) {
+  const x = lookupCatalogBySerial(a), y = lookupCatalogBySerial(b);
+  if (!x || !y) return false;
+  if (x.conceptId && x.conceptId === y.conceptId) return true;
+  const nx = normEnglish(x.name);
+  return Boolean(nx) && nx === normEnglish(y.name);
 }
 
 export function matchCatalogForPost(serial, title) {
@@ -480,8 +496,13 @@ export function parseConceptPageHtml(html, conceptId) {
   return out;
 }
 
-const LOCALES = ['zh-hans-hk', 'zh-hant-hk', 'en-us'];
+// 港服、美服都没有的，再看英服和日服：有的游戏只在欧服、日服上架
+const LOCALES = ['zh-hans-hk', 'zh-hant-hk', 'en-us', 'en-gb', 'ja-jp'];
+// 这次没查成（超时、被拦、服务端出错）的过这么久再查，不当成商店里没有
+const TRANSIENT_RETRY_MS = 30 * 60_000;
+const transientUntil = new Map();
 
+// 返回 found 为 false 时，transient 表示有地区这次没查成，不能断定商店里没有
 async function fetchStoreMetaRemote(conceptId) {
   let best = {
     concept_id: Number(conceptId),
@@ -507,14 +528,19 @@ async function fetchStoreMetaRemote(conceptId) {
         signal: AbortSignal.timeout(12000),
       });
       if (res.status === 404) continue;
-      if (!res.ok) continue;
+      if (!res.ok) {
+        best.transient = true;
+        continue;
+      }
       const html = await res.text();
       const parsed = parseConceptPageHtml(html, conceptId);
       if (parsed.found) {
         parsed.locale = locale;
         return parsed;
       }
-    } catch {}
+    } catch {
+      best.transient = true;
+    }
   }
   return best;
 }
@@ -592,7 +618,14 @@ async function runFetchTask(conceptId, force = false, metaOnly = false) {
     return null;
   }
 
+  if (!force && Date.now() < (transientUntil.get(cid) || 0)) return getCoverFile(cid);
   const meta = await fetchStoreMetaRemote(cid);
+  // 这次没查成：不写缓存，过一会儿再查，免得一次网络抖动就把游戏记成「商店没有」
+  if (!meta.found && meta.transient) {
+    transientUntil.set(cid, Date.now() + TRANSIENT_RETRY_MS);
+    return getCoverFile(cid);
+  }
+  transientUntil.delete(cid);
   // 本次没抓到但以前抓到过：保留旧数据，只记录版本，避免网络抖动把信息清空
   if (metaOnly && !meta.found && row?.found) {
     exec('UPDATE store_meta SET meta_ver = ? WHERE concept_id = ?', STORE_META_VER, cid);

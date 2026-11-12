@@ -3,7 +3,7 @@
 import { all, exec } from './db.mjs';
 import * as bd from './baidu.mjs';
 import { serialsFromName } from './tasks/normalize.mjs';
-import { lookupCatalogBySerial, ensureCoverFile } from './catalog.mjs';
+import { lookupCatalogBySerial, ensureCoverFile, sameCatalogGame } from './catalog.mjs';
 import { bus } from './bus.mjs';
 
 // 读不出编号（分享失效、名字里没有）的帖子隔一段时间才再读
@@ -86,8 +86,39 @@ export function resolveMissingSerials() {
   return running;
 }
 
+// 帖子上写的编号有时是错的（站点把编号写错、少写一位，被认成另一款游戏）。分享里的文件名才是真内容：
+// 链接检查列过的分享里找不到帖子的编号，而且分享里的编号在商店里是另一款游戏时，改用分享里的。
+// 同一款游戏的不同区版本（资料库里英文名一样）不动，免得已经按原编号放进网盘的对不上。只读数据库，不请求百度
+export function verifySerials() {
+  const posts = all(`SELECT p.source_id, p.post_id, p.title, p.serial FROM posts p WHERE COALESCE(p.serial, '') != ''
+                     AND EXISTS (SELECT 1 FROM links l WHERE l.source_id = p.source_id AND l.post_id = p.post_id
+                                 AND l.files_at IS NOT NULL AND l.status NOT IN ('skipped', 'invalid'))`);
+  let fixed = 0;
+  for (const p of posts) {
+    const paths = all(`SELECT sf.path FROM share_files sf JOIN links l ON l.surl = sf.surl
+                       WHERE l.source_id = ? AND l.post_id = ? AND l.status NOT IN ('skipped', 'invalid')`, p.source_id, p.post_id).map(r => r.path);
+    const found = serialsInPaths(paths);
+    if (!found.size || found.has(String(p.serial).toUpperCase())) continue;
+    const pick = pickSerial(found);
+    if (!pick?.conceptId || sameCatalogGame(p.serial, pick.serial)) continue;
+    exec('UPDATE posts SET serial = ?, concept_id = ?, share_serials = ? WHERE source_id = ? AND post_id = ?',
+      pick.serial, pick.conceptId, [...found].join(','), p.source_id, p.post_id);
+    ensureCoverFile(pick.conceptId).catch(() => {});
+    bus.emit('meta', { concept_id: pick.conceptId });
+    console.log(`[${p.post_id}] ${p.title || ''}：帖子写的编号 ${p.serial} 和分享里的 ${[...found].join(', ')} 对不上，改用 ${pick.serial}`);
+    fixed++;
+  }
+  return fixed;
+}
+
 export function startShareSerialSync() {
   setTimeout(resolveMissingSerials, 20_000);
+  setTimeout(verifySerials, 25_000);
   setInterval(resolveMissingSerials, RETRY_MS);
-  bus.on('job', (job) => { if (job?.status === 'done' && job.type === 'crawl') resolveMissingSerials(); });
+  bus.on('job', (job) => {
+    if (job?.status !== 'done' || job.type !== 'crawl') return;
+    resolveMissingSerials();
+    verifySerials();
+  });
+  bus.on('links_checked', () => verifySerials());
 }
