@@ -891,6 +891,8 @@ function GameTile({
   const panState = getPanState(game);
   const isInPan = panState === 'in_pan';
   const isQueued = panState === 'queued';
+  // 盘游说不能玩 → 没法安装，封面用暗色；红框仍表示评价本身
+  const isDim = Boolean(game.review && !game.review.playable);
   // 容量角标：已入盘实心，没入盘空心；转存中、异常、待抓详情这些要处理的状态占着这个角就不显示
   const size = isInPan ? game.pan_size || game.share_size : game.share_size;
   const showOutlineSize = !isInPan && !isQueued && panState !== 'failed' && panState !== 'pending_detail' && !!size;
@@ -913,6 +915,7 @@ function GameTile({
         'tile',
         isInPan && 'is-in-pan',
         isQueued && 'is-queued',
+        isDim && 'is-dim',
         selected && 'is-selected'
       )}
       onClick={handleClick}
