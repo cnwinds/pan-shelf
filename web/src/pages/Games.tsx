@@ -22,9 +22,10 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  ChevronDown,
   Pencil,
 } from 'lucide-react';
-import { api, type BlockedAdd, type FormatState, type Game, type GameFormat, type GameLink, type GameReview, type Job, type LinkPlan, type PanFolder, type PanState, type PlanFile, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
+import { api, type BlockedAdd, type FormatState, type Game, type GameFormat, type GameLink, type GameReview, type InstallPlan, type Job, type LinkPlan, type PanFolder, type PanState, type PlanFile, type RemovalPreview, type Review, type ReviewBrief } from '../lib/api';
 import { useAccount, useSetup, useSources } from '../lib/hooks';
 import { Dropdown } from '../components/Dropdown';
 import { Chip, Empty, ErrorNote, Modal, cx, linkStatus } from '../components/ui';
@@ -686,34 +687,74 @@ function AddFormatsDialog({ count, formats, busy, onClose, onConfirm }: {
   );
 }
 
-// 每种格式一行：状态、版本和固件要求；能加入的可以勾选，已在网盘的可以单独退出
-function FormatRows({ formats, picked, onToggle, onRemove, busy }: {
+// 装法一句话：主游戏 + 各补丁的名字，再加要放几个文件
+const planBrief = (plan: InstallPlan) =>
+  [plan.layers.map((l, i) => (i === 0 ? '主游戏' : l.name || `补丁 ${i}`)).join(' + '), plan.copies.length > 0 && `放 ${plan.copies.length} 个文件`]
+    .filter(Boolean).join(' · ');
+
+// 每种格式一行：格式、版本、固件、大小，后面跟着盘架排的装法（点开看具体文件）；要用户自己做的步骤另起一行。
+// 能加入的可以勾选（只有一种格式时不用勾），已在网盘的可以单独退出，装法可以让大模型重排。
+function FormatRows({ formats, links, plans, selectable, picked, onToggle, onRemove, onReanalyze, busy }: {
   formats: FormatState[];
+  links: GameLink[];
+  plans: Record<string, LinkPlan> | undefined;
+  selectable: boolean;
   picked: Set<GameFormat>;
   onToggle: (f: GameFormat) => void;
-  onRemove: (f: GameFormat) => void;
+  onRemove: ((f: GameFormat) => void) | null;
+  onReanalyze: (surl: string) => void;
   busy: boolean;
 }) {
+  const [open, setOpen] = useState<GameFormat | null>(null);
+  const indent = selectable ? 'pl-[21px]' : '';
   return (
     <div className="mt-3 divide-y divide-line rounded-lg border border-line bg-[#131a27]">
       {formats.map(f => {
         const st = FORMAT_STATE_LABELS[f.state];
-        const pickable = f.state === 'available';
+        const link = links.find(l => l.surl === f.surl);
+        // 编排按资源库选中的那条链接排，同一种格式有几条链接时不一定是这一条
+        const lp = plans?.[f.surl] || Object.values(plans || {}).find(p => links.find(l => l.surl === p.surl)?.format === f.format);
+        const plan = lp?.plan;
+        const size = plan?.size || link?.share_size;
+        const expanded = open === f.format && !!plan;
         return (
-          <div key={f.format} className="flex items-center gap-2 px-3 py-2 text-xs">
-            {pickable ? (
-              <input type="checkbox" checked={picked.has(f.format)} onChange={() => onToggle(f.format)} aria-label={`加入 ${FORMAT_LABELS[f.format].label}`} />
-            ) : (
-              <span className="inline-block w-[13px]" />
-            )}
-            <span className="min-w-0 truncate text-ink">{formatText(f)}</span>
-            <Chip cls={st.cls}>{st.label}</Chip>
-            {f.state === 'in_pan' && (
-              <button type="button" className="btn btn-sm ml-auto h-6! px-2! text-[11px]!" disabled={busy} onClick={() => onRemove(f.format)}>
-                <Trash2 size={10} />
-                只退出这种格式
-              </button>
-            )}
+          <div key={f.format} className="px-3 py-2 text-xs">
+            <div className="flex items-center gap-2">
+              {selectable && (f.state === 'available'
+                ? <input type="checkbox" checked={picked.has(f.format)} onChange={() => onToggle(f.format)} aria-label={`加入 ${FORMAT_LABELS[f.format].label}`} />
+                : <span className="inline-block w-[13px]" />)}
+              <span className="shrink-0 font-medium text-ink">{FORMAT_LABELS[f.format].label}</span>
+              {f.version && <span className="num shrink-0 text-muted">v{f.version}</span>}
+              {f.firmware && <span className="num shrink-0 text-muted" title={`要求固件 ${f.firmware}.xx 或以上`}>{f.firmware}.xx+</span>}
+              {size ? <span className="num shrink-0 text-muted">{bytes(size)}</span> : null}
+              {f.state !== 'available' && <Chip cls={st.cls}>{st.label}</Chip>}
+              {plan ? (
+                <button type="button" className="flex min-w-0 flex-1 items-center gap-1 text-left text-muted hover:text-ink"
+                  title="盘架排的装法，点开看具体文件" onClick={() => setOpen(expanded ? null : f.format)}>
+                  <span className="truncate">{planBrief(plan)}</span>
+                  <ChevronDown size={12} className={cx('shrink-0 transition-transform', expanded && 'rotate-180')} />
+                </button>
+              ) : (
+                <span className={cx('min-w-0 flex-1 truncate', lp?.status === 'failed' ? 'text-warn' : 'text-muted')} title={lp?.error || undefined}>
+                  {lp?.status === 'failed' ? '装法没排出来' : lp ? '正在排装法…' : ''}
+                </span>
+              )}
+              {lp && (lp.status === 'queued'
+                ? <span className="shrink-0 text-[11px] text-muted">重排中</span>
+                : (
+                  <button type="button" className="shrink-0 text-muted hover:text-ink disabled:opacity-40" disabled={busy} title="让大模型重新排这种格式的装法"
+                    onClick={() => onReanalyze(lp.surl)}>
+                    <RotateCcw size={12} />
+                  </button>
+                ))}
+              {f.state === 'in_pan' && onRemove && (
+                <button type="button" className="shrink-0 text-muted hover:text-bad disabled:opacity-40" disabled={busy} title="只退出这种格式" onClick={() => onRemove(f.format)}>
+                  <Trash2 size={12} />
+                </button>
+              )}
+            </div>
+            {plan?.notes.map((n, i) => <div key={i} className={cx('mt-1 text-warn', indent)}>{n}</div>)}
+            {expanded && <div className={cx('mt-2', indent)}><PlanFiles lp={lp!} /></div>}
           </div>
         );
       })}
@@ -1062,6 +1103,10 @@ function GameDrawer({
   });
   const multiFormat = formats.length > 1;
   const addPicked = (force?: boolean) => onAdd(force, multiFormat ? FORMAT_ORDER.filter(f => pickedFormats.has(f)) : undefined);
+  const reanalyze = useMutation({
+    mutationFn: (surl: string) => api.post('/panplay-library/reanalyze', { surl }),
+    onSuccess: () => detail.refetch(),
+  });
 
   // 盘游评过同编号的游戏、但还没核对分享内容时，打开详情就列一遍分享看是不是同一份资源
   const needsCheck = !!detail.data?.game.reviews?.some(r => r.match === 'unknown');
@@ -1227,18 +1272,12 @@ function GameDrawer({
           {/* 核心网盘操作区：加入网盘 / 退出网盘 */}
           <section className={cx('install-box', isInPan && 'in-pan')}>
             {isInPan ? (
-              <>
               <div className="flex items-center justify-between gap-4">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-[14px] font-semibold text-[#5fd3a0]">
-                    <span className="size-2 rounded-full bg-[#5fd3a0]" />
-                    已加入百度网盘
+                  <div className="text-[13px] font-medium text-[#5fd3a0]">
+                    已在网盘{panSize ? ` · ${bytes(panSize)}` : measure.isPending ? ' · 正在统计大小…' : ''}
                   </div>
-                  <div className="mt-1 break-all text-xs text-muted">
-                    {folders.length
-                      ? `${folders.length} 项 · ${panSize ? `共 ${bytes(panSize)}` : measure.isPending ? '正在统计大小…' : '大小未知'}`
-                      : `${panPath ? `路径：${panPath}` : '已在目标网盘目录中'}${panSize ? ` · 占用 ${bytes(panSize)}` : ''}`}
-                  </div>
+                  {!folders.length && panPath && <div className="mt-0.5 break-all text-xs text-muted">{panPath}</div>}
                 </div>
                 <button
                   type="button"
@@ -1250,38 +1289,11 @@ function GameDrawer({
                   退出网盘
                 </button>
               </div>
-              {multiFormat && (
-                <>
-                  <FormatRows formats={formats} picked={pickedFormats} onToggle={toggleFormat} onRemove={f => onRemove([f])} busy={busy} />
-                  {!!availableKey && (
-                    <div className="mt-2 flex justify-end">
-                      <button type="button" className="btn btn-sm" disabled={busy || !pickedFormats.size} onClick={() => addPicked()}>
-                        <CloudDownload size={13} />
-                        加入勾选的格式
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-              {folders.length > 0 && (
-                <PanFolders
-                  folders={folders}
-                  measuring={measure.isPending}
-                  error={measure.error}
-                  onRefresh={() => measure.mutate(true)}
-                />
-              )}
-              </>
             ) : isQueued ? (
               <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-[14px] font-semibold text-[#7aa8ff]">
-                    <span className="size-2 rounded-full bg-[#4d8bff] pulse" />
-                    正在排队转存入盘…
-                  </div>
-                  <div className="mt-1 text-xs text-muted">
-                    后台转存完成后封面将自动点亮为亮色
-                  </div>
+                <div className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-[#7aa8ff]">
+                  <span className="size-2 rounded-full bg-[#4d8bff] pulse" />
+                  正在排队转存…
                 </div>
                 <button
                   type="button"
@@ -1309,16 +1321,11 @@ function GameDrawer({
               </div>
             ) : (
               <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-[14px] font-semibold text-[#e8edf5]">
-                    尚未加入网盘（暗色状态）
-                  </div>
-                  <div className="mt-1 text-xs text-muted">
-                    {game.links.length > 0
-                      ? `共 ${game.links.length} 条百度盘分享${multiFormat ? ` · ${formats.length} 种格式，勾选要加入的` : primaryFormat ? ` · ${primaryFormat}` : ''}`
-                      : '当前暂无可用分享链接，可尝试重新采集'}
-                    {quotaFree != null ? ` · 剩余空间 ${bytes(quotaFree)}` : ''}
-                  </div>
+                <div className="min-w-0 text-xs text-muted">
+                  {[
+                    game.links.length === 0 ? '暂无可用分享，可以试试重新采集' : multiFormat && '勾选要加入的格式',
+                    quotaFree != null && `网盘剩余 ${bytes(quotaFree)}`,
+                  ].filter(Boolean).join(' · ')}
                 </div>
                 <button
                   type="button"
@@ -1331,20 +1338,42 @@ function GameDrawer({
                 </button>
               </div>
             )}
-            {!isInPan && !isQueued && multiFormat && (
-              <FormatRows formats={formats} picked={pickedFormats} onToggle={toggleFormat} onRemove={f => onRemove([f])} busy={busy} />
+            {formats.length > 0 && (
+              <FormatRows
+                formats={formats}
+                links={game.links}
+                plans={game.plans}
+                selectable={multiFormat && !isQueued && (!isInPan || !!availableKey)}
+                picked={pickedFormats}
+                onToggle={toggleFormat}
+                onRemove={isInPan && multiFormat ? f => onRemove([f]) : null}
+                onReanalyze={surl => reanalyze.mutate(surl)}
+                busy={busy || reanalyze.isPending}
+              />
             )}
+            {isInPan && multiFormat && !!availableKey && (
+              <div className="mt-2 flex justify-end">
+                <button type="button" className="btn btn-sm" disabled={busy || !pickedFormats.size} onClick={() => addPicked()}>
+                  <CloudDownload size={13} />
+                  加入勾选的格式
+                </button>
+              </div>
+            )}
+            {isInPan && folders.length > 0 && (
+              <PanFolders
+                folders={folders}
+                measuring={measure.isPending}
+                error={measure.error}
+                onRefresh={() => measure.mutate(true)}
+              />
+            )}
+            <ErrorNote error={reanalyze.error} />
           </section>
 
           {!!game.reviews?.length && (
             <ReviewSection reviews={game.reviews} links={game.links} checking={checkReviews.isPending} checkErrors={checkReviews.data?.errors || []}
               onChanged={() => { detail.refetch(); onUpdated(); }} />
           )}
-
-          {game.plans && Object.keys(game.plans).length > 0 && (
-            <PlanSection game={game} onChanged={() => detail.refetch()} />
-          )}
-
           {/* 游戏介绍与规格 */}
           {(Number(game.concept_id) > 0 || game.description) && (
             <section className="intro">
@@ -1694,65 +1723,45 @@ function reviewTag(r: GameReview, links: GameLink[]): { label: string; title: st
   return { label: label || '这份', title: `${MATCH_LABEL.this}${label ? `（${label}）` : ''}` };
 }
 
-// 一份安装编排（盘游 ADR 0012）：主游戏、补丁、要放的文件、要提醒的步骤
-export function PlanSummary({ lp }: { lp: LinkPlan }) {
-  const p = lp.plan;
-  if (!p) {
-    return <div className="text-xs text-muted">{lp.status === 'failed' ? <span className="text-warn">分析失败：{lp.error || '原因不明'}</span> : lp.status === 'queued' ? '等着分析…' : '还没分析'}</div>;
-  }
+// 编排用到的文件：每层一行（分卷多时只写首尾），要放进游戏目录的文件，最后一行小字是第几版、哪个模型
+function PlanFiles({ lp }: { lp: LinkPlan }) {
+  const p = lp.plan!;
   const files = (list: PlanFile[]) => {
     const size = bytes(list.reduce((n, f) => n + (f.size || 0), 0));
-    return list.length > 2 ? `${list[0].path} … ${list[list.length - 1].path}（${list.length} 卷，${size}）` : `${list.map(f => f.path).join('、')}（${size}）`;
+    return list.length > 2 ? `${list[0].path} … ${list[list.length - 1].path}（${list.length} 卷 ${size}）` : `${list.map(f => f.path).join('、')}（${size}）`;
   };
   return (
-    <div className="space-y-1 text-xs">
+    <div className="space-y-1 text-[11px] leading-relaxed">
       {p.layers.map((l, i) => (
-        <div key={i}>
-          <span className="text-muted">{i === 0 ? '主游戏' : `补丁 ${i}${l.name ? `「${l.name}」` : ''}`}：</span>
-          <span className="break-all font-mono">{files(l.files)}</span>
+        <div key={i} className="flex gap-2">
+          <span className="shrink-0 text-muted">{i === 0 ? '主游戏' : l.name || `补丁 ${i}`}</span>
+          <span className="min-w-0 break-all font-mono text-ink-2">{files(l.files)}</span>
         </div>
       ))}
       {p.copies.map((c, i) => (
-        <div key={`c${i}`}><span className="text-muted">放进游戏目录：</span><span className="break-all font-mono">{c.from.path} → {c.to}</span></div>
+        <div key={`c${i}`} className="flex gap-2">
+          <span className="shrink-0 text-muted">放文件</span>
+          <span className="min-w-0 break-all font-mono text-ink-2">{c.from.path} → {c.to}</span>
+        </div>
       ))}
-      {p.notes.map((n, i) => <div key={`n${i}`} className="text-warn">提醒用户：{n}</div>)}
       <div className="text-muted">
         第 {p.rev} 版 · {p.model} · {dateTime(new Date(p.at * 1000).toISOString())}
-        {lp.status === 'queued' && ' · 盘游反馈了问题，等重新分析'}
         {lp.status === 'failed' && lp.error && ` · 上次重排失败：${lp.error}`}
       </div>
     </div>
   );
 }
 
-function PlanSection({ game, onChanged }: { game: Game; onChanged: () => void }) {
-  const again = useMutation({
-    mutationFn: (surl: string) => api.post('/panplay-library/reanalyze', { surl }),
-    onSuccess: onChanged,
-  });
-  const entries = game.links.filter(l => game.plans?.[l.surl]);
+// 网盘页「最近分析的」列表里展开看的一份编排：文件加上要提醒的步骤
+export function PlanSummary({ lp }: { lp: LinkPlan }) {
+  if (!lp.plan) {
+    return <div className="text-xs text-muted">{lp.status === 'failed' ? <span className="text-warn">没排出来：{lp.error || '原因不明'}</span> : '等着分析…'}</div>;
+  }
   return (
-    <section className="intro">
-      <h3 className="intro-title">安装编排</h3>
-      <div className="space-y-3">
-        {entries.map(l => {
-          const lp = game.plans![l.surl];
-          return (
-            <div key={l.surl}>
-              <div className="mb-1 flex items-center gap-2 text-[13px]">
-                <strong>{(l.format && FORMAT_LABELS[l.format]?.label) || '未标注'}</strong>
-                <span className="font-mono text-xs text-muted">{l.surl}</span>
-                <button type="button" className="btn btn-sm ml-auto" disabled={again.isPending || lp.status === 'queued'} onClick={() => again.mutate(l.surl)}>
-                  {lp.status === 'queued' ? '等重新分析' : '重新分析'}
-                </button>
-              </div>
-              <PlanSummary lp={lp} />
-            </div>
-          );
-        })}
-      </div>
-      <ErrorNote error={again.error} />
-    </section>
+    <div className="space-y-1.5">
+      {lp.plan.notes.map((n, i) => <div key={i} className="text-xs text-warn">{n}</div>)}
+      <PlanFiles lp={lp} />
+    </div>
   );
 }
 
@@ -1872,7 +1881,7 @@ export function RemoveDialog({
       }),
     onSuccess: (r, resetOnly) => {
       if (resetOnly) {
-        onDone(`已将 ${r.reset || postIds.length} 款游戏标记回「未入盘」（暗色状态）`);
+        onDone(`已将 ${r.reset || postIds.length} 款游戏标记回「未入盘」`);
       } else if (r.job) {
         onDone(
           `退出网盘任务 #${r.job.id} 已启动，网盘文件将移入百度网盘回收站（要求安全验证时移到 /盘架待删除），游戏恢复为暗色「未入盘」状态`

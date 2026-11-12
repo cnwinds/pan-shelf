@@ -206,7 +206,7 @@ function panFolders(items, links) {
   });
 }
 
-const DETAIL_LINK_SQL = 'SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format, saved_names, files_at, allow_bad FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid';
+const DETAIL_LINK_SQL = 'SELECT surl, pwd, status, attempts, last_error, dest_dir, transferred_at, remark, format, saved_names, files_at, allow_bad, share_size FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid';
 
 async function gameDetail(source_id, row, enriched) {
   const links = all(DETAIL_LINK_SQL, source_id, String(row.post_id));
