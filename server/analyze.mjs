@@ -87,15 +87,16 @@ async function readTexts(link, files, log) {
 
 const SYSTEM = `你在帮一个 PS5 游戏安装器整理网盘分享里的游戏资源。安装器会把压缩包边下载边解压到主机上这款游戏的目录（有 sce_sys 的那层是游戏根目录），然后按你排的顺序叠补丁、放文件。
 只回一个 JSON 对象，不要别的文字：
-{"main":[序号...],"patches":[{"name":"简短名称","files":[序号...]}],"copies":[{"file":序号,"to":"游戏根目录里的相对路径"}],"packages":[序号...],"notes":["一句话"],"reason":"一句话说明你的判断"}
+{"main":[序号...],"patches":[{"name":"简短名称","files":[序号...],"firmware":{"min":主版本号,"max":主版本号}}],"copies":[{"file":序号,"to":"游戏根目录里的相对路径"}],"packages":[序号...],"notes":["一句话"],"reason":"一句话说明你的判断"}
 规则：
 - main：主游戏那一组压缩包的全部分卷（.rar / .partN.rar / .r00 / .zip / .z01 / .7z / .7z.001 等）。只能有一组，分卷一个都不能少，即使它们散在不同子目录里。
 - patches：按叠放顺序（先装的在前）列出补丁、更新、DLC、backport 等，每组是一个压缩包的全部分卷。跟这款游戏无关的（广告、别的游戏）、PKG 安装包不要放。没有就给空数组。
+- firmware：只适用于某些主机固件的补丁（backport、固件补丁，名字或说明里写着 FW 4xx、5.xx、for 4.03-4.51、7.xx 及以下之类）写上适用的主机固件主版本号范围，min、max 是整数，比如 FW 4xx 写 {"min":4,"max":4}，4.xx-5.xx 写 {"min":4,"max":5}，7.xx 及以下写 {"max":7}。安装器按主机固件只装适用的、主机固件比游戏要求的新时一个都不装，所以几个 backport 按固件选一个时都照常列进 patches、各写各的 firmware。看不出适用哪些固件的、正式补丁、DLC 不写。
 - copies：不在压缩包里、需要放进游戏目录的单独文件（如 .sprx、.prx、eboot.bin）。to 相对游戏根目录，例如 fakelib/libSceAmpr.sprx；说明里要求覆盖哪个文件就写哪个。说明没要求的不要放。
 - packages：要在主机上安装才生效的小 PKG：激活完整版、解锁 DLC 的授权包（一般几 MB，常放在 DLC 目录里，名字或说明里写着激活、解锁、Crack、Unlock，说明会要求"安装 PKG 才能激活"）。安装器装好游戏后会自动安装它们。整款游戏、补丁的 PKG 安装包（几百 MB 到几十 GB）不要放。没有就给空数组。
   说明里要求安装的激活 PKG 不在文件列表里（打包在压缩包里，比如在游戏目录的 DLC 文件夹下）时，安装器解压后会在游戏目录里自己找到并安装，packages 和 notes 都不用写。
 - notes：只写用户必须在主机上亲手做、安装器做不了的步骤，比如往游戏目录以外的地方放文件、必须用某个挂载工具或版本。每条一句简短中文，没有就给空数组。
-  不要写：已经由 main / patches / copies / packages 处理了的事（比如"使用配套的 backport 补丁""安装 DLC 目录下的 PKG 激活"）；资源本身的描述（有几种格式、版本号、大小、固件要求）；网站宣传、广告。
+  不要写：已经由 main / patches / copies / packages 处理了的事（比如"使用配套的 backport 补丁""安装 DLC 目录下的 PKG 激活"）；资源本身的描述（有几种格式、版本号、大小、固件要求、几个 backport 按固件选哪个）；网站宣传、广告。
 - 拿不准的不要编；序号只能用列表里有的。`;
 
 function userPrompt(link, files, texts, remarks, feedback) {
@@ -157,6 +158,23 @@ const safeTarget = (to) => {
   return p;
 };
 
+// 补丁适用的主机固件主版本号范围（盘游按主机固件跳过不适用的层）。没写时为 null
+function firmwareRange(value, name) {
+  if (value == null) return null;
+  const bad = () => new Error(`补丁「${name}」的 firmware 要写成 {"min":主版本号,"max":主版本号}，主版本号是 1 到 99 的整数`);
+  if (typeof value !== 'object' || Array.isArray(value)) throw bad();
+  const out = {};
+  for (const key of ['min', 'max']) {
+    if (value[key] == null) continue;
+    const n = Number(value[key]);
+    if (!Number.isInteger(n) || n < 1 || n > 99) throw bad();
+    out[key] = n;
+  }
+  if (!Object.keys(out).length) return null;
+  if (out.min && out.max && out.min > out.max) throw new Error(`补丁「${name}」的 firmware 里 min 比 max 大`);
+  return out;
+}
+
 // 核对模型的回答，转成资源库里的 plan。不合格时抛错，错误信息会交给模型重来
 export function toPlan(answer, files) {
   const used = new Set();
@@ -175,7 +193,11 @@ export function toPlan(answer, files) {
   };
   const layers = [{ role: 'main', name: '主游戏', files: group(answer?.main, '主游戏') }];
   for (const [n, p] of (Array.isArray(answer?.patches) ? answer.patches : []).entries()) {
-    layers.push({ role: 'patch', name: String(p?.name || `补丁 ${n + 1}`).slice(0, 60), files: group(p?.files, `补丁「${p?.name || n + 1}」`) });
+    const name = String(p?.name || `补丁 ${n + 1}`).slice(0, 60);
+    const layer = { role: 'patch', name, files: group(p?.files, `补丁「${p?.name || n + 1}」`) };
+    const firmware = firmwareRange(p?.firmware, name);
+    if (firmware) layer.firmware = firmware;
+    layers.push(layer);
   }
   const copies = (Array.isArray(answer?.copies) ? answer.copies : []).map(c => {
     const f = pick(c?.file, '要放的文件');
@@ -397,6 +419,17 @@ export function startAnalyzer() {
       AND (plan LIKE '%激活%' OR plan LIKE '%解锁%')`).changes;
     exec('INSERT INTO settings (key, value) VALUES (?, ?)', '_repack_in_archive_pkg_v1', JSON.stringify({ at: nowIso(), queued: n }));
     if (n) console.log(`[analyze] ${n} 份编排的说明里要手动装激活 PKG，重新分析`);
+  }
+  // 补丁层有 firmware 之前排的：像 backport 的层重排一次标上适用固件，盘游才能按主机固件跳过
+  if (!one('SELECT value FROM settings WHERE key = ?', '_repack_backport_firmware_v1')) {
+    const looksFirmware = (l) => /backport|固件|\bfw\s*\d|\d\s*\.?\s*xx\b/i.test(`${l.name} ${l.files.map(f => f.path).join(' ')}`);
+    const stale = all(`SELECT surl, plan FROM link_plans WHERE status = 'ok' AND plan IS NOT NULL`).filter(r => {
+      const layers = JSON.parse(r.plan).layers || [];
+      return layers.slice(1).some(l => !l.firmware && looksFirmware(l));
+    });
+    for (const r of stale) exec(`UPDATE link_plans SET status = 'queued' WHERE surl = ?`, r.surl);
+    exec('INSERT INTO settings (key, value) VALUES (?, ?)', '_repack_backport_firmware_v1', JSON.stringify({ at: nowIso(), queued: stale.length }));
+    if (stale.length) console.log(`[analyze] ${stale.length} 份编排有 backport 还没标适用固件，重新分析`);
   }
   setTimeout(runAnalyzer, 90_000);
   setInterval(runAnalyzer, CHECK_EVERY_MS);

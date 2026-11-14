@@ -1735,11 +1735,16 @@ function PlanFiles({ lp }: { lp: LinkPlan }) {
     const size = bytes(list.reduce((n, f) => n + (f.size || 0), 0));
     return list.length > 2 ? `${list[0].path} … ${list[list.length - 1].path}（${list.length} 卷 ${size}）` : `${list.map(f => f.path).join('、')}（${size}）`;
   };
+  const firmware = (f?: { min?: number; max?: number }) =>
+    !f ? '' : f.min && f.max ? (f.min === f.max ? `${f.min}.xx` : `${f.min}.xx–${f.max}.xx`) : f.max ? `${f.max}.xx 及以下` : `${f.min}.xx 及以上`;
   return (
     <div className="space-y-1 text-[11px] leading-relaxed">
       {p.layers.map((l, i) => (
         <div key={i} className="flex gap-2">
-          <span className="shrink-0 text-muted">{i === 0 ? '主游戏' : l.name || `补丁 ${i}`}</span>
+          <span className="shrink-0 text-muted">
+            {i === 0 ? '主游戏' : l.name || `补丁 ${i}`}
+            {l.firmware && <span className="ml-1 text-warn">（仅 {firmware(l.firmware)} 固件装）</span>}
+          </span>
           <span className="min-w-0 break-all font-mono text-ink-2">{files(l.files)}</span>
         </div>
       ))}

@@ -119,7 +119,8 @@ export interface ReviewStatus {
 export interface PlanFile { path: string; size: number; md5: string }
 export interface InstallPlan {
   rev: number; model: string; at: number; size: number;
-  layers: { role: string; name: string; files: PlanFile[] }[];
+  /** firmware：只适用于这些主机固件主版本的补丁（backport），盘游按主机固件跳过不适用的 */
+  layers: { role: string; name: string; files: PlanFile[]; firmware?: { min?: number; max?: number } }[];
   copies: { from: PlanFile; to: string }[];
   /** 盘游装好游戏后在主机上安装的激活、解锁包；旧编排没有 */
   packages?: PlanFile[];
