@@ -192,17 +192,35 @@ const SHARE_ERR = {
 };
 const INVALID_ERRNO = [105, -7, 117, -21, 115];
 
+// 分享接口偶尔回一张网页（拦截、网关出错）而不是 JSON，隔几秒再请求多半就好了
+async function shareJson(request, tries = 3) {
+  for (let t = 0; ; t++) {
+    const r = await request();
+    const txt = await r.text();
+    try {
+      return JSON.parse(txt);
+    } catch {
+      if (t < tries - 1) {
+        await sleep(3000 * 2 ** t);
+        continue;
+      }
+      const what = /^\s*</.test(txt) ? '一张网页' : txt.trim() ? '看不懂的内容' : '空响应';
+      throw new Error(`百度分享接口回了${what}而不是数据（HTTP ${r.status}），多半是请求太频繁被拦了`);
+    }
+  }
+}
+
 // 递归列出分享里的全部文件。返回 { files: [{ rel, name, size, md5 }], dirs: [rel] } 或 { error, invalid }
 // md5 和转存后网盘里看到的一样（盘游的评价按它认同一份资源）；maxDepth 限制往下列几层（根目录算第 1 层）
 // invalid 为 true 表示链接确定不能用了（失效、取消、提取码错），否则是限流、网络这类过一会儿再试的错
 export async function listShare(surl, pwd, { delayMs = 400, maxDepth = Infinity } = {}) {
   const short = surl.replace(/^1/, '');
   try {
-    const v = await (await fetch(`https://pan.baidu.com/share/verify?surl=${short}&t=${Date.now()}&channel=chunlei&web=1&clienttype=0`, {
+    const v = await shareJson(() => fetch(`https://pan.baidu.com/share/verify?surl=${short}&t=${Date.now()}&channel=chunlei&web=1&clienttype=0`, {
       method: 'POST', signal: AbortSignal.timeout(20000),
       headers: { 'user-agent': UA, referer: `https://pan.baidu.com/share/init?surl=${short}`, 'content-type': 'application/x-www-form-urlencoded' },
       body: `pwd=${pwd || ''}&vcode=&vcode_str=`,
-    })).json();
+    }));
     if (v.errno !== 0) {
       // 没带提取码时百度也可能回「提取码错误」，那说明不了链接失效
       const badPwd = Boolean(pwd) && (v.errno === -9 || v.errno === -12);
@@ -219,8 +237,8 @@ export async function listShare(surl, pwd, { delayMs = 400, maxDepth = Infinity 
       const { dir, depth } = queue.shift();
       for (let page = 1; ; page++) {
         const q = dir === null ? 'root=1' : `root=0&dir=${encodeURIComponent(dir)}`;
-        const j = await (await fetch(`https://pan.baidu.com/share/list?web=1&app_id=${XPAN_APP_ID}&shorturl=${short}&${q}&page=${page}&num=100&order=name&desc=0&showempty=0`,
-          { headers, signal: AbortSignal.timeout(20000) })).json();
+        const j = await shareJson(() => fetch(`https://pan.baidu.com/share/list?web=1&app_id=${XPAN_APP_ID}&shorturl=${short}&${q}&page=${page}&num=100&order=name&desc=0&showempty=0`,
+          { headers, signal: AbortSignal.timeout(20000) }));
         if (j.errno !== 0) return { error: SHARE_ERR[j.errno] || `列目录失败 errno=${j.errno}`, invalid: INVALID_ERRNO.includes(j.errno) };
         for (const e of j.list || []) {
           if (dir === null && rootPrefix === null && e.path?.endsWith(e.server_filename)) rootPrefix = e.path.slice(0, -e.server_filename.length);

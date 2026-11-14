@@ -13,6 +13,8 @@ import { nowIso, sleep } from './util.mjs';
 const TEMP_ROOT = '/盘游/临时';
 const TEXT_RE = /\.(txt|md|nfo|url|ini|json|html?|cfg)$/i;
 const ARCHIVE_RE = /\.(rar|zip|7z)$|\.(7z|zip)\.\d{3}$|\.z\d{2}$|\.r\d{2}$/i;
+// 发布组跟分卷放在一起的 nfo、sfv、截图，模型常连同分卷一起列进组里
+const COMPANION_RE = /\.(txt|md|nfo|diz|sfv|md5|sha1|url|html?|jpe?g|png|gif|webp)$/i;
 const MAX_TEXT_BYTES = 256 * 1024;
 const MAX_TEXT_FILES = 10;
 // 编排里要在主机上安装的包只收激活、解锁用的小包（盘游的上限一样），整款游戏的 PKG 不收
@@ -89,7 +91,7 @@ const SYSTEM = `你在帮一个 PS5 游戏安装器整理网盘分享里的游�
 只回一个 JSON 对象，不要别的文字：
 {"main":[序号...],"patches":[{"name":"简短名称","files":[序号...],"firmware":{"min":主版本号,"max":主版本号}}],"copies":[{"file":序号,"to":"游戏根目录里的相对路径"}],"packages":[序号...],"notes":["一句话"],"reason":"一句话说明你的判断"}
 规则：
-- main：主游戏那一组压缩包的全部分卷（.rar / .partN.rar / .r00 / .zip / .z01 / .7z / .7z.001 等）。只能有一组，分卷一个都不能少，即使它们散在不同子目录里。
+- main：主游戏那一组压缩包的全部分卷（.rar / .partN.rar / .r00 / .zip / .z01 / .7z / .7z.001 等）。只能有一组，分卷一个都不能少，即使它们散在不同子目录里。同目录里的 nfo、sfv、说明文件、截图不是分卷，不要放。
 - patches：按叠放顺序（先装的在前）列出补丁、更新、DLC、backport 等，每组是一个压缩包的全部分卷。跟这款游戏无关的（广告、别的游戏）、PKG 安装包不要放。没有就给空数组。
 - firmware：只适用于某些主机固件的补丁（backport、固件补丁，名字或说明里写着 FW 4xx、5.xx、for 4.03-4.51、7.xx 及以下之类）写上适用的主机固件主版本号范围，min、max 是整数，比如 FW 4xx 写 {"min":4,"max":4}，4.xx-5.xx 写 {"min":4,"max":5}，7.xx 及以下写 {"max":7}。安装器按主机固件只装适用的、主机固件比游戏要求的新时一个都不装，所以几个 backport 按固件选一个时都照常列进 patches、各写各的 firmware。看不出适用哪些固件的、正式补丁、DLC 不写。
 - copies：不在压缩包里、需要放进游戏目录的单独文件（如 .sprx、.prx、eboot.bin）。to 相对游戏根目录，例如 fakelib/libSceAmpr.sprx；说明里要求覆盖哪个文件就写哪个。说明没要求的不要放。
@@ -186,7 +188,8 @@ export function toPlan(answer, files) {
   };
   const group = (list, what) => {
     if (!Array.isArray(list) || !list.length) throw new Error(`${what}是空的`);
-    const out = list.map(i => pick(i, what));
+    let out = list.map(i => pick(i, what));
+    if (out.some(f => ARCHIVE_RE.test(f.path))) out = out.filter(f => ARCHIVE_RE.test(f.path) || !COMPANION_RE.test(f.path));
     const bad = out.find(f => !ARCHIVE_RE.test(f.path));
     if (bad) throw new Error(`${what}里的 ${bad.path} 不是压缩包`);
     return out.sort((a, b) => naturalCompare(a.path, b.path)).map(f => ({ path: f.path, size: f.size, md5: f.md5 || '' }));
@@ -256,6 +259,10 @@ export async function analyzeLink(link, { feedback = [], log = console.log } = {
   const files = stripWrapper(r.files).sort((a, b) => naturalCompare(a.path, b.path));
   if (!files.length) {
     recordFailure(link.surl, { share_sig: sig, error: '分享是空的' }, 'final');
+    return false;
+  }
+  if (!files.some(f => ARCHIVE_RE.test(f.path))) {
+    recordFailure(link.surl, { share_sig: sig, error: '分享里没有压缩包（可能是解压好的游戏文件夹），盘游装不了' }, 'final');
     return false;
   }
   const texts = await readTexts(link, files, log);
