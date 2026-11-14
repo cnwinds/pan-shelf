@@ -4,8 +4,9 @@ import crypto from 'node:crypto';
 import { all, one, exec } from './db.mjs';
 import * as bd from './baidu.mjs';
 import { bus } from './bus.mjs';
+import fs from 'node:fs';
 import { listSources } from './sources.mjs';
-import { enrichGameRow, parseSiteMeta } from './catalog.mjs';
+import { enrichGameRow, parseSiteMeta, postCoverFile } from './catalog.mjs';
 import { classify, cmpVer, FORMAT_DIR } from './linkpick.mjs';
 import { linkFormat } from './layout.mjs';
 import { shareMatches } from './reviews.mjs';
@@ -147,6 +148,43 @@ async function uploadPlans() {
   if (uploaded) console.log(`已上传 ${uploaded} 份编排到 ${PLAN_DIR}`);
 }
 
+// 帖子封面在外面的图床上，主机所在的网络常常连域名都解析不了（盘架这边走代理取得到）。传一份到网盘，
+// 资源库里写 info.cover_file，盘游从网盘读。按图片地址记着传过哪些，地址变了才重传
+export const COVER_DIR = `${LIBRARY_DIR}/封面`;
+const COVERS_KEY = '_library_site_covers';
+const MAX_COVER_UPLOADS = 40;
+const COVER_RETRY_MS = 6 * 3600_000;
+const coverFailedAt = new Map();
+async function uploadSiteCovers(games) {
+  const done = JSON.parse(one('SELECT value FROM settings WHERE key = ?', COVERS_KEY)?.value || '{}');
+  let uploaded = 0, failed = 0;
+  for (const g of games) {
+    const url = g.info?.cover;
+    if (!url) continue;
+    const key = crypto.createHash('sha1').update(url).digest('hex').slice(0, 16);
+    const file = `${COVER_DIR}/${g.title_id}-${key}.img`;
+    const recent = Date.now() - (coverFailedAt.get(file) || 0) < COVER_RETRY_MS;
+    if (done[g.title_id] !== file && !recent && uploaded + failed < MAX_COVER_UPLOADS) {
+      const local = await postCoverFile(url);
+      try {
+        if (!local) throw new Error('图床取不到');
+        await bd.writeSmallFile(file, fs.readFileSync(local));
+        done[g.title_id] = file;
+        uploaded++;
+      } catch (e) {
+        failed++;
+        coverFailedAt.set(file, Date.now());
+        console.warn(`上传帖子封面 ${g.title_id} 失败：${e.message}`);
+      }
+    }
+    if (done[g.title_id] === file) g.info.cover_file = file;
+  }
+  if (uploaded) {
+    exec('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', COVERS_KEY, JSON.stringify(done));
+    console.log(`已上传 ${uploaded} 张帖子封面到 ${COVER_DIR}`);
+  }
+}
+
 const loadState = () => JSON.parse(one('SELECT value FROM settings WHERE key = ?', KEY)?.value || '{}');
 const saveState = (s) => exec('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', KEY, JSON.stringify(s));
 
@@ -161,6 +199,7 @@ export function publishLibrary({ force = false } = {}) {
     const doc = buildLibrary();
     // 一个游戏都没有多半是数据出了问题，不拿空文件覆盖盘游正在用的那份
     if (!doc.games.length) throw new Error('没有可发布的游戏（需要有游戏编号、并且有 exFAT / 文件夹 / 未标注格式的链接）');
+    await uploadSiteCovers(doc.games);
     const hash = crypto.createHash('sha1').update(JSON.stringify([doc.library_dir, doc.games])).digest('hex');
     const st = loadState();
     if (!force && hash === st.hash) {
