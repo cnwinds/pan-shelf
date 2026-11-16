@@ -468,12 +468,10 @@ export default async function routes(app) {
   // ---------- 总览 ----------
   app.get('/api/overview', async () => {
     const sources = listSources().map(s => ({ ...s, stats: sourceStats(s.id) }));
-    const plan = one(`SELECT id, dest_dir, source_id, created_at, plan FROM normalize_plans WHERE status = 'ready' ORDER BY id DESC LIMIT 1`);
-    const lastDone = Object.fromEntries(['crawl', 'transfer', 'normalize_plan', 'normalize_exec'].map(t => {
+    const lastDone = Object.fromEntries(['crawl', 'transfer'].map(t => {
       const r = one(`SELECT id, source_id, finished_at, status, summary FROM jobs WHERE type = ? AND status = 'done' ORDER BY id DESC LIMIT 1`, t);
       return [t, r ? { ...r, summary: r.summary ? JSON.parse(r.summary) : null } : null];
     }));
-    const planGroups = plan ? JSON.parse(plan.plan).groups.length : 0;
     return {
       sources,
       active_jobs: jobs.activeJobs(),
@@ -482,7 +480,6 @@ export default async function routes(app) {
       schedule_enabled: getSettings().schedule.enabled,
       unread_events: one('SELECT COUNT(*) n FROM events WHERE read = 0').n,
       recent_events: all('SELECT * FROM events ORDER BY id DESC LIMIT 8'),
-      pending_plan: planGroups ? { id: plan.id, dest_dir: plan.dest_dir, created_at: plan.created_at, groups: planGroups } : null,
       last_done: lastDone,
     };
   });
@@ -683,9 +680,11 @@ export default async function routes(app) {
   app.get('/api/jobs/:id/logs', async (req) => req.query.tail ? jobs.jobLogsTail(Number(req.params.id), Math.min(Number(req.query.tail), 5000)) : jobs.jobLogs(Number(req.params.id), Number(req.query.after) || 0, Math.min(Number(req.query.limit) || 500, 5000)));
   app.post('/api/jobs', async (req) => {
     const { type, source_id = null, params = {} } = req.body || {};
-    if (['crawl', 'transfer', 'normalize_plan', 'probe', 'prune', 'dedupe'].includes(type) && !getSource(source_id)) throw bad(400, '需要指定来源');
-    if (type === 'normalize_exec') throw bad(400, '请从规整预览发起执行');
+    if (['crawl', 'transfer', 'probe', 'dedupe'].includes(type) && !getSource(source_id)) throw bad(400, '需要指定来源');
     if (type === 'remove') throw bad(400, '请在游戏库里选择游戏后删除');
+    if (type === 'normalize_plan' || type === 'normalize_exec' || type === 'prune') {
+      throw bad(400, '该任务类型已移除');
+    }
     return jobs.enqueue(type, { source_id, params, trigger: req.headers['x-ps5watch-cli'] ? 'cli' : 'manual' });
   });
   app.post('/api/jobs/:id/pause', async (req) => jobs.pauseJob(req.params.id));
@@ -760,31 +759,6 @@ export default async function routes(app) {
     };
   });
   app.get('/api/storage/ls', async (req) => ({ path: req.query.path || '/', rows: (await bd.listDir(req.query.path || '/')) || [] }));
-
-  // ---------- 规整 ----------
-  app.get('/api/normalize/plans', async (req) => {
-    const rows = all(`SELECT id, source_id, dest_dir, status, created_at, executed_at FROM normalize_plans ${req.query.source_id ? 'WHERE source_id = ?' : ''} ORDER BY id DESC LIMIT 30`,
-      ...(req.query.source_id ? [req.query.source_id] : []));
-    return rows;
-  });
-  app.get('/api/normalize/plans/:id', async (req) => {
-    const r = one('SELECT * FROM normalize_plans WHERE id = ?', Number(req.params.id));
-    if (!r) throw bad(404, '预览不存在');
-    return { ...r, plan: JSON.parse(r.plan), result: r.result ? JSON.parse(r.result) : null };
-  });
-  app.post('/api/normalize/plans/:id/execute', async (req) => {
-    const id = Number(req.params.id);
-    const r = one('SELECT * FROM normalize_plans WHERE id = ?', id);
-    if (!r) throw bad(404, '预览不存在');
-    if (r.status !== 'ready') throw bad(409, '该预览已执行或已过期，请重新生成');
-    const targets = req.body?.targets;
-    if (!Array.isArray(targets) || !targets.length) throw bad(400, '请至少勾选一个目标');
-    return jobs.enqueue('normalize_exec', { source_id: r.source_id, params: { plan_id: id, targets }, dedupe: false });
-  });
-  app.post('/api/normalize/plans/:id/discard', async (req) => {
-    exec(`UPDATE normalize_plans SET status = 'discarded' WHERE id = ? AND status = 'ready'`, Number(req.params.id));
-    return { ok: true };
-  });
 
   // ---------- 消息 ----------
   app.get('/api/events', async (req) => all('SELECT * FROM events ORDER BY id DESC LIMIT ?', Math.min(Number(req.query.limit) || 100, 500)));

@@ -20,9 +20,7 @@ import { repickMultiFormat, reclassifyZstdFormat } from './linkpick.mjs';
 import routes from './api.mjs';
 import './tasks/crawl.mjs';
 import './tasks/transfer.mjs';
-import './tasks/normalize.mjs';
 import './tasks/du.mjs';
-import './tasks/prune.mjs';
 import './tasks/dedupe.mjs';
 import './tasks/remove.mjs';
 

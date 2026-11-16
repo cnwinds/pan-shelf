@@ -30,7 +30,7 @@ function remarkBefore(seg) {
   return all.length ? all[all.length - 1][1].replace(/\s+/g, ' ').trim().slice(0, 200) : '';
 }
 
-// 游戏编号（如「游戏编号：PPSA02429」），网盘目录规整后就以它命名，删除游戏时靠它定位
+// 游戏编号（如「游戏编号：PPSA02429」），转存目录按它命名，删除游戏时靠它定位
 export function extractSerial(html) {
   const m = html.match(/游戏编号\s*[:：]\s*(?:<[^>]+>\s*)*([A-Za-z]{4})[-_ ]?(\d{4,6})/);
   return m ? (m[1] + m[2].padStart(5, '0')).toUpperCase() : null;

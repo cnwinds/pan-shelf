@@ -8,8 +8,7 @@ import { duration, dateTime } from '../lib/format';
 
 export const PHASE: Record<string, string> = {
   list: '翻列表页', detail: '抓详情页', waiting: '等待采集产出新链接', transfer: '转存中',
-  analyze: '分析目录', plan: '生成计划', exec: '执行规整', scan: '扫描目录', probe: '探测站点', done: '已完成',
-  prune_scan: '查找排除项', prune_delete: '删除排除项',
+  scan: '扫描目录', probe: '探测站点', done: '已完成',
   dedupe_index: '索引网盘文件', dedupe_share: '读取分享内容', dedupe_delete: '删除其它版本', remove: '从网盘删除游戏',
 };
 
@@ -40,7 +39,7 @@ export function JobControls({ job, size = 'sm' }: { job: Job; size?: 'sm' | 'md'
       {job.status === 'running' && <button className={b} onClick={() => act.mutate({ id: job.id, action: 'pause' })} disabled={act.isPending}><Pause size={13} />暂停</button>}
       {job.status === 'paused' && <button className={cx(b, 'btn-primary')} onClick={() => act.mutate({ id: job.id, action: 'resume' })} disabled={act.isPending}><Play size={13} />继续</button>}
       {live && <button className={cx(b, 'btn-danger')} onClick={() => confirm(`确定取消「${job.label}」任务？已完成的部分会保留。`) && act.mutate({ id: job.id, action: 'cancel' })} disabled={act.isPending}><Square size={12} />取消</button>}
-      {!live && job.type !== 'normalize_exec' && <button className={b} onClick={() => act.mutate({ id: job.id, action: 'rerun' })} disabled={act.isPending}><RotateCcw size={13} />重新运行</button>}
+      {!live && <button className={b} onClick={() => act.mutate({ id: job.id, action: 'rerun' })} disabled={act.isPending}><RotateCcw size={13} />重新运行</button>}
     </div>
   );
 }

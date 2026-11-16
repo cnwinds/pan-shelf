@@ -4,7 +4,7 @@ import { getSettings } from './settings.mjs';
 import { nowIso } from './util.mjs';
 import { bus } from './bus.mjs';
 
-// kind: run_done | new_games | error | login_expired | quota_low | site_blocked | plan_ready | info
+// kind: run_done | new_games | error | login_expired | quota_low | site_blocked | info
 export async function notify(kind, level, title, body = '') {
   const r = exec('INSERT INTO events (ts, kind, level, title, body) VALUES (?, ?, ?, ?, ?)', nowIso(), kind, level, title, body);
   const ev = one('SELECT * FROM events WHERE id = ?', r.lastInsertRowid);

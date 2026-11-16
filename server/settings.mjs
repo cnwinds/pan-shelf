@@ -29,19 +29,15 @@ export const DEFAULTS = {
     max_per_run: 0,               // 0 = 不限
     follow_crawl: true,           // 采集进行中时，转存任务等待新链接而不是直接结束
     pick_one: true,               // 一个帖子多条链接时每种格式（exFAT / 文件夹 / 未标注）只收录版本最高的一个，其余自动跳过
-    // 百度转存只能整份分享一起存，所以排除项是「存完再删」：名称命中的文件/目录整个删掉
-    exclude_enabled: true,
-    exclude_pattern: '(^|[^a-z])f?pkg([^a-z]|$)',
   },
   normalize: {
     serial_prefixes: legacy.serial_prefixes ?? 'PPSA|CUSA|CUAS|PUSA|PCAS|PRLA|PLAS|PASA|PEGA|ACBA|BLAS|HLPS',
-    op_interval_ms: 600,
-    auto_plan_after_transfer: true, // 转存完成后自动生成规整预览（不执行）
+    op_interval_ms: 600,          // 退出网盘、去重等网盘写操作的间隔
   },
   schedule: {
     enabled: true,
     times: ['10:00'],
-    steps: ['crawl', 'transfer', 'normalize_plan'],
+    steps: ['crawl', 'transfer'],
     probe_enabled: true,          // 站点被封时定时探测，解封后自动跑一轮
     probe_interval_min: 60,
   },
@@ -49,7 +45,7 @@ export const DEFAULTS = {
     toast: true,
     webhook_url: '',
     webhook_format: 'json',       // json | wecom | dingtalk | feishu
-    on: { run_done: true, new_games: true, error: true, login_expired: true, quota_low: true, site_blocked: true, plan_ready: true },
+    on: { run_done: true, new_games: true, error: true, login_expired: true, quota_low: true, site_blocked: true },
   },
   // 用大模型分析分享里的文件和说明，给盘游排安装编排（盘游 docs/adr/0012）。OpenAI 兼容接口
   llm: {
@@ -95,13 +91,15 @@ function validate(s) {
     else s[a][b] = v;
   }
   if (!Array.isArray(s.schedule.times) || s.schedule.times.some(t => !/^([01]\d|2[0-3]):[0-5]\d$/.test(t))) errs.push('运行时间格式应为 HH:MM');
-  const okSteps = ['crawl', 'transfer', 'normalize_plan'];
-  if (!Array.isArray(s.schedule.steps) || s.schedule.steps.some(x => !okSteps.includes(x))) errs.push('定时步骤无效');
+  const okSteps = ['crawl', 'transfer'];
+  // 旧配置里可能还带着已拆除的 normalize_plan / 排除项字段，读入时丢掉
+  if (Array.isArray(s.schedule.steps)) s.schedule.steps = s.schedule.steps.filter(x => okSteps.includes(x));
+  if (!Array.isArray(s.schedule.steps) || !s.schedule.steps.length) s.schedule.steps = [...okSteps];
+  if (s.schedule.steps.some(x => !okSteps.includes(x))) errs.push('定时步骤无效');
   try { new RegExp(s.normalize.serial_prefixes); } catch { errs.push('serial 前缀不是合法的正则表达式'); }
-  try {
-    // 能匹配空串的规则会命中所有名称，等于清空整个目录
-    if (new RegExp(s.transfer.exclude_pattern, 'i').test('')) errs.push('排除规则会匹配所有名称，请写得更具体');
-  } catch { errs.push('排除规则不是合法的正则表达式'); }
+  if (s.transfer) { delete s.transfer.exclude_enabled; delete s.transfer.exclude_pattern; }
+  if (s.normalize) delete s.normalize.auto_plan_after_transfer;
+  if (s.notify?.on) delete s.notify.on.plan_ready;
   if (s.notify.webhook_url && !/^https?:\/\//.test(s.notify.webhook_url)) errs.push('Webhook 地址需以 http:// 或 https:// 开头');
   if (!['json', 'wecom', 'dingtalk', 'feishu'].includes(s.notify.webhook_format)) errs.push('Webhook 消息格式无效');
   if (s.llm.base_url && !/^https?:\/\//.test(s.llm.base_url)) errs.push('大模型接口地址需以 http:// 或 https:// 开头');

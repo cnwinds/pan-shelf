@@ -8,7 +8,7 @@ const STD_RE = /^[A-Z]{4}\d{4,6}$/;
 
 export const linkFormat = (link) => link.format || (link.remark != null ? classify(link.remark).format : null);
 
-// 这条链接该转存到哪：知道游戏编号和格式时进格式子目录，否则还放在转存目录第一层，等规整
+// 这条链接该转存到哪：知道游戏编号和格式时进格式子目录，否则还放在转存目录第一层
 export function linkDestDir(src, link) {
   const root = src.dest_dir.replace(/\/+$/, '');
   const format = linkFormat(link);
@@ -36,7 +36,7 @@ export function formatStates(links) {
   return Object.keys(FORMAT_DIR).filter(f => out.has(f)).map(f => out.get(f));
 }
 
-// 分享里只有一个外包目录时，把它里面的东西挪到格式子目录这一层，外包目录删掉（和规整合并时一样）
+// 分享里只有一个外包目录时，把它里面的东西挪到格式子目录这一层，外包目录删掉
 export async function flattenWrapper(dir, names, { signal, log } = {}) {
   if (names?.length !== 1) return;
   const list = await bd.listDir(dir);

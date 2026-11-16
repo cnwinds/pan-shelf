@@ -1,11 +1,10 @@
 import { one, exec } from '../db.mjs';
-import { defineJob, enqueue, isActive } from '../jobs.mjs';
+import { defineJob, isActive } from '../jobs.mjs';
 import { getSource } from '../sources.mjs';
 import * as bd from '../baidu.mjs';
 import { getSettings } from '../settings.mjs';
 import { notify } from '../notify.mjs';
 import { nowIso, fmtBytes } from '../util.mjs';
-import { excludeRe, pruneExcluded } from './prune.mjs';
 import { linkDestDir, flattenWrapper } from '../layout.mjs';
 import { ensureShareFiles, badReviewOfLink, hasMatchableBad, freshReviews } from '../reviews.mjs';
 
@@ -137,13 +136,8 @@ defineJob('transfer', {
       ctx.progress({ done, total: done + remaining(), counts });
       await ctx.sleep(getSettings().transfer.interval_ms);
     }
-    let pruned = null;
-    if (counts.saved > 0 && excludeRe()) {
-      try { pruned = await pruneExcluded(ctx, src.dest_dir); }
-      catch (e) { if (ctx.signal.aborted) throw e; ctx.log('warn', '清理排除项失败：' + e.message); }
-    }
     ctx.progress({ phase: 'done', current: null, done, total: done, counts });
-    return { ...counts, total: done, pending_left: remaining(), bad_titles: badTitles.slice(0, 5), ...(pruned?.deleted ? { pruned: pruned.deleted, pruned_bytes: pruned.bytes } : {}) };
+    return { ...counts, total: done, pending_left: remaining(), bad_titles: badTitles.slice(0, 5) };
   },
   onDone(job, s) {
     if (s?.bad) {
@@ -153,10 +147,7 @@ defineJob('transfer', {
     if (!s || s.total === 0) return;
     const name = getSource(job.source_id)?.name || job.source_id;
     notify('run_done', s.failed ? 'warn' : 'success', `转存完成：新增 ${s.saved} 个`,
-      `${name}：已存在 ${s.exists}，失效 ${s.invalid}，失败 ${s.failed}${s.pending_left ? `，剩余 ${s.pending_left}` : ''}${s.pruned ? `；按排除规则删除 ${s.pruned} 项（${fmtBytes(s.pruned_bytes)}）` : ''}`);
-    if (s.saved > 0 && getSettings().normalize.auto_plan_after_transfer) {
-      enqueue('normalize_plan', { source_id: job.source_id, trigger: 'auto' });
-    }
+      `${name}：已存在 ${s.exists}，失效 ${s.invalid}，失败 ${s.failed}${s.pending_left ? `，剩余 ${s.pending_left}` : ''}`);
   },
   onFail(job, e) {
     notify('error', 'error', '转存任务失败', e.message);

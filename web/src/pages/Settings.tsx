@@ -16,7 +16,7 @@ const REQUIRED: { id: StepId; label: string; title: string }[] = [
 const OPTIONAL: { id: keyof Settings; label: string }[] = [
   { id: 'crawl', label: '采集节奏' },
   { id: 'transfer', label: '转存策略' },
-  { id: 'normalize', label: '目录规整' },
+  { id: 'normalize', label: '编号识别' },
   { id: 'schedule', label: '定时运行' },
   { id: 'notify', label: '通知' },
   { id: 'llm', label: '大模型分析' },
@@ -213,7 +213,7 @@ function OptionalOverview({ s, def }: { s: Settings; def: Settings }) {
   const summary: Record<keyof Settings, ReactNode> = {
     crawl: <>约每 {per.toFixed(1)} 秒请求一次站点，避免被封</>,
     transfer: <>{s.transfer.auto ? '采集到新游戏后自动转存' : '手动挑选入盘'}{s.transfer.pick_one ? '，每个游戏只收一个版本' : ''}，保底 {s.transfer.reserve_gb} GB</>,
-    normalize: <>{s.normalize.auto_plan_after_transfer ? '转存后自动生成规整预览' : '手动生成规整预览'}，确认后才执行</>,
+    normalize: <>识别前缀 {s.normalize.serial_prefixes.split('|').slice(0, 3).join(' / ')}…，网盘写操作间隔 {s.normalize.op_interval_ms} ms</>,
     schedule: s.schedule.enabled ? <>每天 {s.schedule.times.join('、') || '—'} 自动运行</> : '未开启，需要手动运行',
     notify: <>{[s.notify.toast && '桌面通知', s.notify.webhook_url && 'Webhook'].filter(Boolean).join(' + ') || '只记录在总览页'}</>,
     llm: s.llm.enabled ? <>用 {s.llm.model} 给盘游排安装编排</> : '未开启，盘游按固定规则安装',
@@ -368,7 +368,12 @@ function TransferForm({ d, def, set }: { d: Draft; def: Draft; set: Setter }) {
           <Toggle checked={t.follow_crawl} onChange={v => s({ follow_crawl: v })} label="采集进行时，转存边等边存" hint="转存任务不会因为暂时没链接就结束，而是等采集产出新链接后继续，直到采集完成。只在开启自动转存时生效。" />
         </div>
       </Card>
-      <ExcludeCard t={t} def={def.transfer} s={s} />
+      <Card title="收录哪个版本" desc="站点常在一个帖子里给出同一游戏的多个版本，每个链接上方的「备注」写着格式和版本号。采集时据此挑选，PKG / FPKG 格式的链接一律不收录。">
+        <div className="sm:col-span-2 space-y-4">
+          <Toggle checked={t.pick_one} onChange={v => s({ pick_one: v })} label="每个游戏只收录一个版本"
+            hint="优先 exFAT，其次文件夹格式，再次未标注格式的；同格式取版本号最高的。其余链接标为「已跳过」，单独补丁 / DLC 链接也会跳过。需要时可在游戏库里对某条链接手动转存。" />
+        </div>
+      </Card>
       <Card title="空间保底" desc="网盘剩余空间低于保底线时，转存会自动暂停并通知你。清理空间或调低保底线后，在任务页点「继续」。">
         <Num label="保底剩余空间" unit="GB" value={t.reserve_gb} onChange={v => s({ reserve_gb: v })} def={def.transfer.reserve_gb} min={0}
           hint={free != null ? <>当前剩余 {bytes(free)}，扣除保底后还能转存约 {bytes(Math.max(0, free - t.reserve_gb * 1024 ** 3))}。</> : undefined} />
@@ -486,48 +491,17 @@ function DestDirDialog({ source, onClose }: { source: Source; onClose: () => voi
   );
 }
 
-function ExcludeCard({ t, def, s }: { t: Draft['transfer']; def: Draft['transfer']; s: (p: Partial<Draft['transfer']>) => void }) {
-  const [sample, setSample] = useState('PPSA03683-app-pkg.part01.rar');
-  let re: RegExp | null = null, err = '';
-  try { re = new RegExp(t.exclude_pattern, 'i'); if (re.test('')) err = '这个规则会匹配所有名称'; } catch { err = '不是合法的正则表达式'; }
-  const hit = re && !err ? re.test(sample) : null;
-  return (
-    <>
-    <Card title="收录哪个版本" desc="站点常在一个帖子里给出同一游戏的多个版本，每个链接上方的「备注」写着格式和版本号。采集时据此挑选，PKG / FPKG 格式的链接一律不收录。">
-      <div className="sm:col-span-2 space-y-4">
-        <Toggle checked={t.pick_one} onChange={v => s({ pick_one: v })} label="每个游戏只收录一个版本"
-          hint="优先 exFAT，其次文件夹格式，再次未标注格式的；同格式取版本号最高的。其余链接标为「已跳过」，单独补丁 / DLC 链接也会跳过。需要时可在游戏库里对某条链接手动转存。" />
-      </div>
-    </Card>
-    <Card title="转存后清理" desc="百度转存只能整份分享一起存，所以这里是「存完就删」：每次转存有新内容后，删掉目标目录里名称命中规则的文件和目录。命中的目录整个删除，删空的父目录也会一并删掉。删除的内容会进网盘回收站。">
-      <div className="sm:col-span-2 space-y-4">
-        <Toggle checked={t.exclude_enabled} onChange={v => s({ exclude_enabled: v })} label="转存后自动删除排除项" />
-        <Field label="排除规则（正则，不区分大小写）" hint={<>默认匹配独立出现的 pkg / fpkg，例如 <code>xxx-app-pkg.part1.rar</code>、<code>卡卡罗特-FPKG</code>，不会误伤 <code>namespace_pkgs</code> 这类名字。{t.exclude_pattern !== def.exclude_pattern && <button type="button" className="ml-1 underline" onClick={() => s({ exclude_pattern: def.exclude_pattern })}>恢复默认</button>}</>}>
-          <input className="field font-mono" value={t.exclude_pattern} onChange={e => s({ exclude_pattern: e.target.value })} />
-        </Field>
-        <Field label="试一试" hint={err ? <span className="text-bad">{err}</span> : hit ? <span className="text-bad">会被删除</span> : <span className="text-ok">会保留</span>}>
-          <input className="field font-mono" value={sample} onChange={e => setSample(e.target.value)} />
-        </Field>
-      </div>
-    </Card>
-    </>
-  );
-}
-
-// ---------- 规整 ----------
+// ---------- 编号识别 ----------
 function NormalizeForm({ d, def, set }: { d: Draft; def: Draft; set: Setter }) {
   const n = d.normalize, s = (p: Partial<Draft['normalize']>) => set('normalize', p);
   return (
-    <Card title="目录规整" desc="把转存进来的目录统一改成 PPSA12345、CUSA12345 这样的 serial 命名，同一游戏的多个目录会合并。规整总是先出预览，你确认后才会动网盘。">
-      <div className="sm:col-span-2">
-        <Toggle checked={n.auto_plan_after_transfer} onChange={v => s({ auto_plan_after_transfer: v })} label="转存完成后自动生成规整预览" hint="只生成预览并通知你，不会自动执行。" />
-      </div>
+    <Card title="编号识别" desc="从目录名、文件名和分享内容里识别 PPSA12345、CUSA12345 这类游戏编号；清单、退出网盘、分享编号都靠它。转存本身会直接落到「编号/@格式」目录。">
       <div className="sm:col-span-2">
         <Field label="识别的 serial 前缀" hint={<>用竖线分隔。目录名或文件名里出现「前缀 + 4~6 位数字」就会被识别。{n.serial_prefixes !== def.normalize.serial_prefixes && <button type="button" className="ml-1 underline" onClick={() => s({ serial_prefixes: def.normalize.serial_prefixes })}>恢复默认</button>}</>}>
           <input className="field font-mono" value={n.serial_prefixes} onChange={e => s({ serial_prefixes: e.target.value })} />
         </Field>
       </div>
-      <Num label="网盘操作间隔" unit="毫秒" value={n.op_interval_ms} onChange={v => s({ op_interval_ms: v })} def={def.normalize.op_interval_ms} step={100} min={0} hint="每次改名、移动、删除之间的等待。" />
+      <Num label="网盘操作间隔" unit="毫秒" value={n.op_interval_ms} onChange={v => s({ op_interval_ms: v })} def={def.normalize.op_interval_ms} step={100} min={0} hint="退出网盘、去重等写操作之间的等待，避免网盘接口过快。" />
     </Card>
   );
 }
@@ -538,7 +512,6 @@ function ScheduleForm({ d, set }: { d: Draft; set: Setter }) {
   const steps = [
     { id: 'crawl', label: '采集', hint: '找新游戏并抓网盘链接' },
     { id: 'transfer', label: '转存', hint: '把待转存的链接存进网盘' },
-    { id: 'normalize_plan', label: '生成规整预览', hint: '不会自动执行，生成后通知你确认' },
   ];
   return (
     <>
@@ -582,8 +555,7 @@ function ScheduleForm({ d, set }: { d: Draft; set: Setter }) {
 // ---------- 通知 ----------
 const NOTIFY_EVENTS: { id: string; label: string }[] = [
   { id: 'new_games', label: '发现新游戏' },
-  { id: 'run_done', label: '转存或规整完成' },
-  { id: 'plan_ready', label: '规整预览待确认' },
+  { id: 'run_done', label: '转存完成' },
   { id: 'quota_low', label: '网盘空间不足' },
   { id: 'site_blocked', label: '站点封禁与恢复' },
   { id: 'login_expired', label: '网盘登录失效' },
@@ -762,7 +734,7 @@ function Account() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="font-display text-[17px] font-semibold">百度网盘登录</h2>
-            <p className="mt-1 max-w-[72ch] text-[13px] text-muted">转存、浏览目录、查空间、删除和规整都使用这一个登录态（保存在 bduss.txt）。用百度网盘 App 扫码即可，一般能保持几个月，失效时会通知你重新扫码。</p>
+            <p className="mt-1 max-w-[72ch] text-[13px] text-muted">转存、浏览目录、查空间和删除都使用这一个登录态（保存在 bduss.txt）。用百度网盘 App 扫码即可，一般能保持几个月，失效时会通知你重新扫码。</p>
           </div>
           <button className="btn btn-sm" onClick={() => { setFresh(true); refetch(); }} disabled={isFetching}><RefreshCw size={12} className={cx(isFetching && 'animate-spin')} />重新检查</button>
         </div>
@@ -771,7 +743,7 @@ function Account() {
           <div className="flex-1">
             {acc?.transfer_login.ok
               ? <><div className="font-medium">{acc.transfer_login.name}</div><div className="text-xs text-ok">登录有效</div></>
-              : <><div className="font-medium">未登录</div><div className="text-xs text-bad">转存、目录浏览、删除和规整都无法使用</div></>}
+              : <><div className="font-medium">未登录</div><div className="text-xs text-bad">转存、目录浏览和删除都无法使用</div></>}
           </div>
           {waiting
             ? <button className="btn" onClick={() => cancel.mutate()}>取消登录</button>

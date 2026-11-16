@@ -19,11 +19,8 @@ export const STAGE: Record<string, { color: string; soft: string; text: string }
   crawl: { color: 'bg-crawl', soft: 'bg-crawl-soft', text: 'text-crawl' },
   probe: { color: 'bg-crawl', soft: 'bg-crawl-soft', text: 'text-crawl' },
   transfer: { color: 'bg-transfer', soft: 'bg-transfer-soft', text: 'text-transfer' },
-  prune: { color: 'bg-transfer', soft: 'bg-transfer-soft', text: 'text-transfer' },
   dedupe: { color: 'bg-transfer', soft: 'bg-transfer-soft', text: 'text-transfer' },
   remove: { color: 'bg-bad', soft: 'bg-bad-soft', text: 'text-bad' },
-  normalize_plan: { color: 'bg-normalize', soft: 'bg-normalize-soft', text: 'text-normalize' },
-  normalize_exec: { color: 'bg-normalize', soft: 'bg-normalize-soft', text: 'text-normalize' },
   du: { color: 'bg-ink-2', soft: 'bg-line-2', text: 'text-ink-2' },
 };
 export const stageOf = (t: JobType | string) => STAGE[t] || STAGE.du;

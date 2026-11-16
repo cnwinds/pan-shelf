@@ -67,7 +67,6 @@ export async function changeDestDir(sourceId, input, { move = true } = {}) {
   tx(() => {
     exec('UPDATE sources SET dest_dir = ? WHERE id = ?', newDir, sourceId);
     if (move && moved) exec('UPDATE links SET dest_dir = ? WHERE source_id = ? AND dest_dir = ?', newDir, sourceId, oldDir);
-    exec(`UPDATE normalize_plans SET status = 'superseded' WHERE dest_dir = ? AND status = 'ready'`, oldDir);
   });
   return { dest_dir: newDir, moved, skipped };
 }

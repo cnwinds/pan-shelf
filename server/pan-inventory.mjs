@@ -1,5 +1,5 @@
 // 网盘清单：定时列各来源转存目录的第一层，记下名称里的游戏编号，游戏库据此判断「已入盘」
-// （网盘里原有的游戏、手动存进去的、规整改过名的都能识别）
+// （网盘里原有的游戏、手动存进去的都能识别）
 import { all, exec, tx } from './db.mjs';
 import { listSources, getSource } from './sources.mjs';
 import * as bd from './baidu.mjs';
@@ -11,7 +11,7 @@ import { purgeStaleDu } from './tasks/du.mjs';
 
 const INTERVAL_MS = 30 * 60_000;
 // 这些任务会改动转存目录，完成后立即刷新
-const PAN_JOBS = new Set(['transfer', 'remove', 'normalize_exec', 'dedupe', 'prune']);
+const PAN_JOBS = new Set(['transfer', 'remove', 'dedupe']);
 const running = new Map();
 const lastAttempt = new Map();
 

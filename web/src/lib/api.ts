@@ -23,7 +23,7 @@ export const api = {
 
 // ---------- 类型 ----------
 export type JobStatus = 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled' | 'interrupted';
-export type JobType = 'crawl' | 'transfer' | 'normalize_plan' | 'normalize_exec' | 'du' | 'probe' | 'prune' | 'dedupe' | 'remove';
+export type JobType = 'crawl' | 'transfer' | 'du' | 'probe' | 'dedupe' | 'remove';
 
 export interface Progress {
   phase?: string; done?: number; total?: number; current?: string | null;
@@ -68,7 +68,6 @@ export interface AppEvent { id: number; ts: string; kind: string; level: 'info' 
 export interface Overview {
   sources: Source[]; active_jobs: Job[]; sites: SiteHealth[]; next_runs: string[]; schedule_enabled: boolean;
   unread_events: number; recent_events: AppEvent[];
-  pending_plan: { id: number; dest_dir: string; created_at: string; groups: number } | null;
   last_done: Record<string, { id: number; source_id: string | null; finished_at: string; status: JobStatus; summary: Record<string, number> | null } | null>;
 }
 
@@ -214,20 +213,12 @@ export interface PanFolder {
 
 export interface Settings {
   crawl: { detail_interval_sec: number; jitter_sec: number; list_pages_default: number; list_pages_max: number; stop_after_empty_pages: number; timeout_sec: number; retries: number; backlog_per_run: number; max_detail_failures: number; block_threshold: number };
-  transfer: { auto: boolean; interval_ms: number; timeout_sec: number; reserve_gb: number; quota_check_every: number; max_per_run: number; follow_crawl: boolean; pick_one: boolean; exclude_enabled: boolean; exclude_pattern: string };
-  normalize: { serial_prefixes: string; op_interval_ms: number; auto_plan_after_transfer: boolean };
+  transfer: { auto: boolean; interval_ms: number; timeout_sec: number; reserve_gb: number; quota_check_every: number; max_per_run: number; follow_crawl: boolean; pick_one: boolean };
+  normalize: { serial_prefixes: string; op_interval_ms: number };
   schedule: { enabled: boolean; times: string[]; steps: string[]; probe_enabled: boolean; probe_interval_min: number };
   notify: { toast: boolean; webhook_url: string; webhook_format: string; on: Record<string, boolean> };
   llm: { enabled: boolean; base_url: string; api_key: string; model: string; interval_sec: number };
   server: { port: number };
-}
-
-export interface PlanStep { op: 'rename' | 'merge' | 'move_file' | 'delete_dup' | 'into_format'; from: string; by?: string; move?: string[]; dup?: string[]; format?: GameFormat }
-export interface PlanGroup { target: string; target_exists: boolean; steps: PlanStep[] }
-export interface NormalizePlan {
-  id: number; source_id: string; dest_dir: string; status: string; created_at: string; executed_at: string | null;
-  plan: { dest_dir: string; total: number; standard: number; groups: PlanGroup[]; anomalies: { name: string; isdir: boolean; reason: string }[] };
-  result: { targets: string[]; results: { target: string; ok: boolean; ops: any[] }[]; counts: Record<string, number> } | null;
 }
 
 export interface DuRow {

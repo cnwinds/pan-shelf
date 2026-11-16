@@ -19,13 +19,9 @@ export function runPipeline({ trigger = 'manual', steps, source_ids } = {}) {
   const sources = listSources().filter(s => s.enabled && (!source_ids || source_ids.includes(s.id)));
   const jobs = [];
   for (const s of sources) {
-    let prev = null;
     for (const step of steps) {
-      // 转存与采集并行（转存会跟随采集等待新链接），规整预览等转存结束
-      const after = step === 'normalize_plan' && prev ? [prev.id] : [];
-      const j = enqueue(step, { source_id: s.id, trigger, params: after.length ? { after } : {} });
-      jobs.push(j);
-      prev = j;
+      // 转存与采集并行（转存会跟随采集等待新链接）
+      jobs.push(enqueue(step, { source_id: s.id, trigger }));
     }
   }
   return jobs;

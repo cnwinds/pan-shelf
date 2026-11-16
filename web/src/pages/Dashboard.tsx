@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Play, Radar, CloudDownload, FolderTree, Clock3, CircleAlert, CircleCheck, Info, TriangleAlert, ArrowRight } from 'lucide-react';
+import { Play, Radar, CloudDownload, Clock3, CircleAlert, CircleCheck, Info, TriangleAlert } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Job, type Overview, type Source } from '../lib/api';
 import { useAccount, useOverview, useStartJob, useSettings } from '../lib/hooks';
@@ -28,7 +28,7 @@ export function Dashboard() {
       <PageHeader
         title="总览"
         desc={ov.schedule_enabled && ov.next_runs[0]
-          ? <>下次定时运行：{dateTime(ov.next_runs[0])}。定时运行会依次采集、转存，并生成规整预览。</>
+          ? <>下次定时运行：{dateTime(ov.next_runs[0])}。定时运行会依次采集、转存。</>
           : '定时运行已关闭，可以在「设置 → 定时运行」里开启。'}
         actions={<button className="btn btn-primary" onClick={() => pipeline.mutate()} disabled={pipeline.isPending}><Play size={14} />立即运行一轮</button>}
       />
@@ -96,17 +96,14 @@ function Pipeline({ ov, source }: { ov: Overview; source: Source }) {
   const active = (type: string) => ov.active_jobs.find(j => j.type === type && j.source_id === source.id);
   const crawlJob = active('crawl') || active('probe');
   const transferJob = active('transfer');
-  const normJob = active('normalize_exec') || active('normalize_plan');
   const site = ov.sites.find(s => s.source_id === source.id);
   const [crawlOpen, setCrawlOpen] = useState(false);
   const start = useStartJob();
-  const plan = ov.pending_plan && ov.pending_plan.dest_dir === source.dest_dir ? ov.pending_plan : null;
-  const lastPlan = ov.last_done.normalize_plan?.source_id === source.id ? ov.last_done.normalize_plan : null;
   const transferred = st.links.saved + st.links.exists;
 
   return (
     <>
-      <div className="grid items-stretch gap-0 md:grid-cols-[1fr_48px_1fr_48px_1fr] max-md:gap-3">
+      <div className="grid items-stretch gap-0 md:grid-cols-[1fr_48px_1fr] max-md:gap-3">
         <Station
           stage="crawl" icon={<Radar size={18} />} title="采集" job={crawlJob}
           big={st.posts.done} of={st.posts.total} unit="个游戏已抓详情"
@@ -135,22 +132,6 @@ function Pipeline({ ov, source }: { ov: Overview; source: Source }) {
           action={<button className="btn btn-sm" onClick={() => start.mutate({ type: 'transfer', source_id: source.id })} disabled={!!transferJob || st.links.pending === 0}
             title={st.links.pending === 0 ? '没有待转存的链接' : undefined}><Play size={12} />开始转存</button>}
         />
-        <Connector live={!!transferJob && transferJob.status === 'running'} color="text-transfer" />
-        <Station
-          stage="normalize" icon={<FolderTree size={18} />} title="规整" job={normJob}
-          big={lastPlan?.summary?.standard ?? 0} unit="个标准 serial 目录"
-          lines={[
-            !!plan && { label: '等你确认', value: plan.groups, tone: 'normalize', to: '/storage/normalize' },
-            !!lastPlan?.summary?.anomalies && { label: '无法推导', value: lastPlan.summary.anomalies, to: '/storage/normalize' },
-          ]}
-          status={plan ? <>预览生成于 {dateTime(plan.created_at)}</> : lastPlan ? <>{dateTime(lastPlan.finished_at)}检查过，目录已整齐</> : <>还没有检查过目录</>}
-          action={
-            <div className="flex gap-1.5">
-              {plan && <Link to="/storage/normalize" className="btn btn-sm btn-primary">查看预览<ArrowRight size={12} /></Link>}
-              <button className="btn btn-sm" onClick={() => start.mutate({ type: 'normalize_plan', source_id: source.id })} disabled={!!normJob}>生成预览</button>
-            </div>
-          }
-        />
       </div>
       <ErrorNote error={start.error} />
       <CrawlDialog open={crawlOpen} onClose={() => setCrawlOpen(false)} source={source} pending={st.posts.pending} />
@@ -158,17 +139,17 @@ function Pipeline({ ov, source }: { ov: Overview; source: Source }) {
   );
 }
 
-type Line = { label: string; value: number; tone?: 'crawl' | 'transfer' | 'normalize' | 'bad'; to?: string } | false;
+type Line = { label: string; value: number; tone?: 'crawl' | 'transfer' | 'bad'; to?: string } | false;
 
 function Station({ stage, icon, title, job, big, of, unit, lines, status, action }: {
-  stage: 'crawl' | 'transfer' | 'normalize'; icon: ReactNode; title: string; job?: Job;
+  stage: 'crawl' | 'transfer'; icon: ReactNode; title: string; job?: Job;
   big: number; of?: number; unit: string; lines: Line[]; status: ReactNode; action: ReactNode;
 }) {
-  const color = { crawl: 'text-crawl', transfer: 'text-transfer', normalize: 'text-normalize' }[stage];
-  const barColor = { crawl: 'bg-crawl', transfer: 'bg-transfer', normalize: 'bg-normalize' }[stage];
-  const soft = { crawl: 'bg-crawl-soft', transfer: 'bg-transfer-soft', normalize: 'bg-normalize-soft' }[stage];
+  const color = { crawl: 'text-crawl', transfer: 'text-transfer' }[stage];
+  const barColor = { crawl: 'bg-crawl', transfer: 'bg-transfer' }[stage];
+  const soft = { crawl: 'bg-crawl-soft', transfer: 'bg-transfer-soft' }[stage];
   return (
-    <section className={cx('panel flex flex-col p-5', job && 'ring-2 ring-offset-0', job && { crawl: 'ring-crawl/35', transfer: 'ring-transfer/35', normalize: 'ring-normalize/35' }[stage])}>
+    <section className={cx('panel flex flex-col p-5', job && 'ring-2 ring-offset-0', job && { crawl: 'ring-crawl/35', transfer: 'ring-transfer/35' }[stage])}>
       <div className="flex items-center justify-between">
         <div className={cx('flex items-center gap-2 font-display text-[16px] font-semibold', color)}>
           <span className={cx('grid size-8 place-items-center rounded-lg', soft)}>{icon}</span>{title}
@@ -186,7 +167,7 @@ function Station({ stage, icon, title, job, big, of, unit, lines, status, action
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
           {lines.filter(Boolean).map(l => {
             const x = l as Exclude<Line, false>;
-            const inner = <><span className="text-muted">{x.label}</span> <span className={cx('num text-[15px]', x.tone === 'bad' && 'text-bad', x.tone === 'crawl' && 'text-crawl', x.tone === 'transfer' && 'text-transfer', x.tone === 'normalize' && 'text-normalize')}>{x.value}</span></>;
+            const inner = <><span className="text-muted">{x.label}</span> <span className={cx('num text-[15px]', x.tone === 'bad' && 'text-bad', x.tone === 'crawl' && 'text-crawl', x.tone === 'transfer' && 'text-transfer')}>{x.value}</span></>;
             return x.to ? <Link key={x.label} to={x.to} className="hover:underline">{inner}</Link> : <span key={x.label}>{inner}</span>;
           })}
         </div>

@@ -3,12 +3,10 @@
 //
 //   node ps5watch.mjs serve                  启动 Web 控制台（默认 http://127.0.0.1:5175）
 //   node ps5watch.mjs check                  账号 / 配额 / 统计
-//   node ps5watch.mjs run                    一轮流水线：采集 → 转存 → 规整预览（计划任务入口）
+//   node ps5watch.mjs run                    一轮流水线：采集 → 转存（计划任务入口）
 //   node ps5watch.mjs crawl [--pages N] [--full] [--no-backlog] [--source ID]
 //   node ps5watch.mjs transfer [--source ID]
-//   node ps5watch.mjs normalize [--apply]    生成规整预览；--apply 直接执行预览里的全部目标
 //   node ps5watch.mjs du [路径] [--force]     网盘用量扫描
-//   node ps5watch.mjs prune [--dry] [--source ID]  删除转存目录里命中排除规则的文件（默认 PKG 版本）
 //   node ps5watch.mjs dedupe [--apply] [--source ID]  同一游戏转存了多个版本时只留选中的那个（默认只预览）
 //   node ps5watch.mjs retry-failed [--source ID]
 //   node ps5watch.mjs report                 状态统计
@@ -30,7 +28,7 @@ const say = (...a) => console.log(`[${ts()}]`, ...a);
 if (cmd === 'serve') {
   await import('./server/index.mjs');
 } else if (cmd === 'help' || cmd === '--help') {
-  console.log(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 16).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
+  console.log(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 14).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
 } else {
   const base = await serverBase();
   await (base ? remote(base) : local());
@@ -50,8 +48,6 @@ function jobRequests(sourceId) {
     case 'run': return [{ pipeline: true }];
     case 'crawl': return [{ type: 'crawl', source_id: sourceId, params: { ...(opt('pages') ? { pages: Number(opt('pages')) } : {}), ...(flag('full') ? { full: true } : {}), ...(flag('no-backlog') ? { backlog: false } : {}) } }];
     case 'transfer': return [{ type: 'transfer', source_id: sourceId }];
-    case 'normalize': return [{ type: 'normalize_plan', source_id: sourceId, apply: flag('apply') }];
-    case 'prune': return [{ type: 'prune', source_id: sourceId, params: { dry: flag('dry') } }];
     case 'dedupe': return [{ type: 'dedupe', source_id: sourceId, params: { dry: !flag('apply') } }];
     case 'du': return [{ type: 'du', params: { path: positional[0] ? '/' + positional[0].replace(/^\/+/, '') : '/', force: flag('force') } }];
     default: return null;
@@ -81,15 +77,7 @@ async function remote(base) {
     if (r.pipeline) jobs.push(...(await call('POST', '/pipeline', {})).jobs);
     else jobs.push(await call('POST', '/jobs', r));
   }
-  const results = await followRemote(call, jobs.map(j => j.id));
-  if (cmd === 'normalize' && flag('apply')) {
-    const planId = results[0]?.summary?.plan_id;
-    const plan = planId && await call('GET', '/normalize/plans/' + planId);
-    const targets = plan?.plan.groups.map(g => g.target) || [];
-    if (!targets.length) return say('没有需要规整的目标');
-    const j = await call('POST', `/normalize/plans/${planId}/execute`, { targets });
-    await followRemote(call, [j.id]);
-  }
+  await followRemote(call, jobs.map(j => j.id));
 }
 
 async function followRemote(call, ids) {
@@ -114,7 +102,7 @@ async function local() {
   const { migrateLegacy } = await import('./server/db.mjs');
   migrateLegacy();
   const jobs = await import('./server/jobs.mjs');
-  await Promise.all(['crawl', 'transfer', 'normalize', 'du', 'prune', 'dedupe', 'remove'].map(t => import(`./server/tasks/${t}.mjs`)));
+  await Promise.all(['crawl', 'transfer', 'du', 'dedupe', 'remove'].map(t => import(`./server/tasks/${t}.mjs`)));
   const { listSources } = await import('./server/sources.mjs');
   const { bus } = await import('./server/bus.mjs');
   const sources = listSources();
@@ -158,17 +146,6 @@ async function local() {
   bus.on('job', j => { if (j && j.trigger === 'auto') watch.add(j.id); });
   const settled = () => [...watch].every(id => !['queued', 'running', 'paused'].includes(jobs.getJob(id).status));
   while (!settled()) await new Promise(r => setTimeout(r, 1000));
-
-  if (cmd === 'normalize' && flag('apply')) {
-    const planId = jobs.getJob(ids[0]).summary?.plan_id;
-    const { one } = await import('./server/db.mjs');
-    const plan = planId && JSON.parse(one('SELECT plan FROM normalize_plans WHERE id = ?', planId).plan);
-    const targets = plan?.groups.map(g => g.target) || [];
-    if (targets.length) {
-      const j = jobs.enqueue('normalize_exec', { source_id: sourceId, params: { plan_id: planId, targets }, trigger: 'cli', dedupe: false });
-      while (['queued', 'running', 'paused'].includes(jobs.getJob(j.id).status)) await new Promise(r => setTimeout(r, 1000));
-    } else say('没有需要规整的目标');
-  }
   process.exit(0);
 }
 
@@ -181,6 +158,7 @@ function printStatus(acc, sources, local = false) {
 }
 
 function unknown() {
-  console.error('未知命令: ' + cmd + '\n运行 node ps5watch.mjs help 查看用法');
-  process.exit(2);
+  say(`未知命令：${cmd}`);
+  say('运行 node ps5watch.mjs help 查看用法');
+  process.exit(1);
 }

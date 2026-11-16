@@ -35,7 +35,7 @@ export function Jobs() {
 
   return (
     <>
-      <PageHeader title="任务" desc="采集、转存、规整和用量扫描都以任务形式运行。站点相关的任务永远一个接一个执行，避免请求并发导致 IP 被封。"
+      <PageHeader title="任务" desc="采集、转存和用量扫描都以任务形式运行。站点相关的任务永远一个接一个执行，避免请求并发导致 IP 被封。"
         actions={<button className="btn btn-primary" onClick={() => setCreating(true)}><Plus size={14} />新建任务</button>} />
 
       <div className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
@@ -102,14 +102,13 @@ function JobDetail({ id, sourceName }: { id: number; sourceName: (s: string | nu
         {job.summary && Object.entries(job.summary).filter(([k]) => COUNTER[k] || SUMMARY[k]).map(([k, v]) => (
           <Meta key={k} label={COUNTER[k] || SUMMARY[k]}><span className="num text-[15px]">{String(v)}</span></Meta>
         ))}
-        {job.type === 'normalize_plan' && job.summary?.plan_id && <Meta label="预览"><Link className="text-signal hover:underline" to="/storage/normalize">查看规整预览</Link></Meta>}
       </div>
       <LogView jobId={job.id} className="h-[460px]" />
     </div>
   );
 }
 
-const SUMMARY: Record<string, string> = { total: '处理总数', pending_left: '剩余待转存', pending_detail: '剩余待抓详情', groups: '待规整目标', anomalies: '无法推导', standard: '标准目录', dirs: '目录数', skipped: '跳过' };
+const SUMMARY: Record<string, string> = { total: '处理总数', pending_left: '剩余待转存', pending_detail: '剩余待抓详情', dirs: '目录数', skipped: '跳过' };
 
 const Meta = ({ label, children }: { label: string; children: React.ReactNode }) => (
   <div><div className="text-xs text-muted">{label}</div><div>{children}</div></div>
@@ -124,14 +123,12 @@ function NewJobDialog({ open, onClose, onCreated }: { open: boolean; onClose: ()
   const [backlog, setBacklog] = useState(true);
   const [path, setPath] = useState('/');
   const [force, setForce] = useState(false);
-  const [pruneDry, setPruneDry] = useState(true);
+  const [dedupeDry, setDedupeDry] = useState(true);
   useEffect(() => { if (!sid && sources?.length) setSid(sources.find(s => s.enabled)?.id || sources[0].id); }, [sources, sid]);
 
   const types = [
     { id: 'crawl', label: '采集', desc: '翻列表页找新游戏，并抓详情页里的网盘链接' },
     { id: 'transfer', label: '转存', desc: '把待转存的链接存进网盘' },
-    { id: 'normalize_plan', label: '规整预览', desc: '分析目标目录，生成改名与合并计划（不会改动网盘）' },
-    { id: 'prune', label: '清理排除项', desc: '删除转存目录里命中排除规则的文件和目录（默认是 PKG 版本）' },
     { id: 'dedupe', label: '重复版本清理', desc: '同一游戏转存了多个版本时，只保留按规则选中的那个（exFAT 优先）' },
     { id: 'du', label: '用量扫描', desc: '统计网盘某个目录下各子目录占用的空间' },
     { id: 'probe', label: '站点探测', desc: '请求一次站点首页，检查是否能访问' },
@@ -140,7 +137,7 @@ function NewJobDialog({ open, onClose, onCreated }: { open: boolean; onClose: ()
     const params: Record<string, unknown> =
       type === 'crawl' ? { ...(pages ? { pages } : {}), backlog }
         : type === 'du' ? { path: path.startsWith('/') ? path : '/' + path, force }
-          : type === 'prune' || type === 'dedupe' ? { dry: pruneDry } : {};
+          : type === 'dedupe' ? { dry: dedupeDry } : {};
     start.mutate({ type, source_id: type === 'du' ? null : sid, params }, { onSuccess: (j) => { onClose(); onCreated(j); } });
   };
 
@@ -165,8 +162,8 @@ function NewJobDialog({ open, onClose, onCreated }: { open: boolean; onClose: ()
             <Toggle checked={backlog} onChange={setBacklog} label="同时补抓历史缺口" />
           </>
         )}
-        {(type === 'prune' || type === 'dedupe') && (
-          <Toggle checked={pruneDry} onChange={setPruneDry} label="只列出要删的文件，不删除" hint="先看日志里的清单，确认无误后关掉这个开关再跑一次。规则在「设置 → 转存策略」里修改。" />
+        {type === 'dedupe' && (
+          <Toggle checked={dedupeDry} onChange={setDedupeDry} label="只列出要删的文件，不删除" hint="先看日志里的清单，确认无误后关掉这个开关再跑一次。" />
         )}
         {type === 'du' && (
           <>
