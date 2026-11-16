@@ -143,7 +143,7 @@ defineJob('normalize_plan', {
       const fmts = formatsOfSerial(ctx.job.source_id, e.name);
       if (!fmts.size) continue;
       if (fmts.size > 1) {
-        anomalies.push({ name: e.name, isdir: true, reason: `转存过 ${[...fmts].map(f => FORMAT_LABEL[f]).join('、')} 多种格式混在一起，分不出哪些文件是哪种，请手动放进 @exfat / @folder / @other` });
+        anomalies.push({ name: e.name, isdir: true, reason: `转存过 ${[...fmts].map(f => FORMAT_LABEL[f]).join('、')} 多种格式混在一起，分不出哪些文件是哪种，请手动放进 @folder / @zstd / @exfat / @other` });
         continue;
       }
       const fmt = [...fmts][0];

@@ -67,14 +67,15 @@ const REGION_NAMES: Record<string, string> = {
 };
 
 const FORMAT_LABELS: Record<string, { label: string; cls: string }> = {
+  folder: { label: '文件夹', cls: 'bg-line-2 text-ink-2' },
+  zstd: { label: 'ZSTD', cls: 'bg-ok-soft text-ok' },
   exfat: { label: 'exFAT', cls: 'bg-ok-soft text-ok' },
   ffpkg: { label: 'ffpkg', cls: 'bg-line-2 text-ink-2' },
   ffpfs: { label: 'ffpfs', cls: 'bg-line-2 text-ink-2' },
-  folder: { label: '文件夹', cls: 'bg-line-2 text-ink-2' },
   pkg: { label: 'PKG', cls: 'bg-bad-soft text-bad' },
   unknown: { label: '未标注', cls: 'bg-line-2 text-muted' },
 };
-const FORMAT_ORDER: GameFormat[] = ['exfat', 'folder', 'unknown'];
+const FORMAT_ORDER: GameFormat[] = ['folder', 'zstd', 'exfat', 'unknown'];
 const FORMAT_STATE_LABELS: Record<FormatState['state'], { label: string; cls: string }> = {
   in_pan: { label: '已在网盘', cls: 'bg-ok-soft text-ok' },
   queued: { label: '排队转存', cls: 'bg-line-2 text-[#7aa8ff]' },
@@ -672,7 +673,7 @@ function AddFormatsDialog({ count, formats, busy, onClose, onConfirm }: {
     >
       <div className="space-y-3 text-[13px]">
         <p className="text-muted">
-          这些游戏有不止一种格式。每种格式转存到游戏编号目录下各自的子目录（@exfat、@folder、@other），盘游安装时可以选装哪种。只要其中一部分格式的，取消勾选其他的。
+          这些游戏有不止一种格式。每种格式转存到游戏编号目录下各自的子目录（@folder、@zstd、@exfat、@other），盘游安装时可以选装哪种。只要其中一部分格式的，取消勾选其他的。
         </p>
         <div className="flex flex-wrap gap-2">
           {formats.map(f => (

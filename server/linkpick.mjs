@@ -1,13 +1,13 @@
-// 一个帖子常给出同一游戏的多个版本（exFAT / 文件夹 / fpkg，新旧版本号）。每种格式各收一个：
-//   exFAT、文件夹、未标注各取版本号最高的，同版本按页面顺序；PKG/FPKG 一律不收（盘游装不了）
-// 转存时每种格式放进游戏编号目录下的格式子目录（@exfat / @folder / @other），盘游据此让你选装哪种格式
+// 一个帖子常给出同一游戏的多个版本（exFAT / 文件夹 / ZSTD / fpkg，新旧版本号）。每种格式各收一个：
+//   文件夹、ZSTD、exFAT、未标注各取版本号最高的，同版本按页面顺序；PKG/FPKG 一律不收（盘游装不了）
+// 转存时每种格式放进游戏编号目录下的格式子目录（@folder / @zstd / @exfat / @other），盘游据此让你选装哪种格式
 import { all, one, exec, tx } from './db.mjs';
 import { getSettings } from './settings.mjs';
 
-export const FORMAT_LABEL = { exfat: 'exFAT', folder: '文件夹', pkg: 'PKG', unknown: '未标注' };
-export const FORMATS = ['exfat', 'folder', 'unknown'];
+export const FORMAT_LABEL = { folder: '文件夹', zstd: 'ZSTD', exfat: 'exFAT', pkg: 'PKG', unknown: '未标注' };
+export const FORMATS = ['folder', 'zstd', 'exfat', 'unknown'];
 // 网盘里的格式子目录名，和盘游约定好，不能随意改
-export const FORMAT_DIR = { exfat: '@exfat', folder: '@folder', unknown: '@other' };
+export const FORMAT_DIR = { folder: '@folder', zstd: '@zstd', exfat: '@exfat', unknown: '@other' };
 export const formatOfDir = (name) => Object.keys(FORMAT_DIR).find(f => FORMAT_DIR[f] === String(name).toLowerCase()) || null;
 export const isFormatDir = (name) => formatOfDir(name) !== null;
 const EXTRA_RE = /补丁|dlc|金手指|存档|修改器|升级档|更新档|追加内容/i;
@@ -16,6 +16,7 @@ export function classify(remark = '') {
   const r = remark.toLowerCase();
   let format = 'unknown';
   if (r.includes('exfat')) format = 'exfat';
+  else if (r.includes('zstd')) format = 'zstd';
   else if (/(^|[^a-z])f?pkg([^a-z]|$)/.test(r)) format = 'pkg';
   else if (r.includes('文件夹')) format = 'folder';
   const version = remark.match(/v?(\d{1,2}\.\d{2,3}(?:\.\d{2,3})?)/i)?.[1] || null;
@@ -75,6 +76,34 @@ export function repickMultiFormat() {
     exec('INSERT INTO settings (key, value) VALUES (?, ?)', KEY, JSON.stringify({ at: new Date().toISOString(), restored: n }));
   });
   return n;
+}
+
+// 以前备注带 zstd 的链接落在「未标注」；改成独立格式后回填 format，并按新规则把该收的从自动跳过里捞回来
+export function reclassifyZstdFormat() {
+  const KEY = '_zstd_format_v1';
+  if (one('SELECT value FROM settings WHERE key = ?', KEY)) return { updated: 0, restored: 0 };
+  let updated = 0, restored = 0;
+  tx(() => {
+    for (const l of all(`SELECT surl, remark, format FROM links WHERE remark IS NOT NULL AND lower(remark) LIKE '%zstd%'`)) {
+      const next = classify(l.remark).format;
+      if (next !== 'zstd' || l.format === 'zstd') continue;
+      updated += exec(`UPDATE links SET format = 'zstd' WHERE surl = ?`, l.surl).changes;
+    }
+    const posts = all(`SELECT DISTINCT source_id, post_id FROM links WHERE status = 'skipped' AND last_error LIKE '自动跳过：%'
+      AND surl IN (SELECT surl FROM links WHERE format = 'zstd')`);
+    for (const p of posts) {
+      // 个别链接 remark 还没抓到时按空串分类，别整帖跳过，免得 zstd 那条捞不回来
+      const links = all('SELECT surl, remark, status, last_error, format FROM links WHERE source_id = ? AND post_id = ? ORDER BY rowid', p.source_id, p.post_id)
+        .map(l => ({ ...l, remark: l.remark ?? '' }));
+      for (const l of pickLinks(links)) {
+        if (l.chosen && l.status === 'skipped' && l.last_error?.startsWith('自动跳过：')) {
+          restored += exec(`UPDATE links SET status = 'available', last_error = NULL WHERE surl = ?`, l.surl).changes;
+        }
+      }
+    }
+    exec('INSERT INTO settings (key, value) VALUES (?, ?)', KEY, JSON.stringify({ at: new Date().toISOString(), updated, restored }));
+  });
+  return { updated, restored };
 }
 
 export const pickSummary = (picked) => {

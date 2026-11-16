@@ -233,7 +233,7 @@ if (!planCols.has('uploaded_rev')) db.exec('ALTER TABLE link_plans ADD COLUMN up
 // 分析失败时：连着失败了几次、什么时候自动再试（不再自动重试的为空）
 if (!planCols.has('fail_count')) db.exec('ALTER TABLE link_plans ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0');
 if (!planCols.has('retry_at')) db.exec('ALTER TABLE link_plans ADD COLUMN retry_at TEXT');
-// 盘游评价时装的是哪种格式（exfat / folder），旧评价为空
+// 盘游评价时装的是哪种格式（folder / zstd / exfat …），旧评价为空
 const reviewCols = new Set(all('PRAGMA table_info(reviews)').map(c => c.name));
 if (!reviewCols.has('format')) db.exec('ALTER TABLE reviews ADD COLUMN format TEXT');
 const postCols = new Set(all('PRAGMA table_info(posts)').map(c => c.name));

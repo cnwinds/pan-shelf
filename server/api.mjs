@@ -264,8 +264,8 @@ function computePanState(post, links, hasPanDir = false) {
   return 'no_link';
 }
 
-// 没入盘的游戏在格子上显示分享多大：按 exFAT、文件夹、未标注的顺序取第一种列过分享的链接，和盘游默认打开的格式一致
-const SIZE_ORDER = ['exfat', 'folder', 'unknown'];
+// 没入盘的游戏在格子上显示分享多大：按文件夹、ZSTD、exFAT、未标注的顺序取第一种列过分享的链接，和盘游默认打开的格式一致
+const SIZE_ORDER = ['folder', 'zstd', 'exfat', 'unknown'];
 function shareSize(links) {
   const usable = links.filter(l => l.status !== 'skipped' && l.status !== 'invalid' && Number(l.share_size) > 0);
   const ranked = usable.sort((a, b) => {
@@ -343,7 +343,7 @@ function selectedSurls(body, { withSkipped = false } = {}) {
 }
 
 // 加入网盘时会转存的链接：有「可入盘」的用它们，否则（还没入盘时）从没失效的链接里按优选规则挑。
-// formats 给了时只要这些格式（exfat / folder / unknown），不给是全部格式
+// formats 给了时只要这些格式（folder / zstd / exfat / unknown），不给是全部格式
 function linksToAdd(source_id, id, formats = null) {
   const want = (l) => !formats || formats.includes(linkFormat(l));
   const available = all(`SELECT surl, format, remark FROM links WHERE source_id = ? AND post_id = ? AND status = 'available'`, source_id, id).filter(want);

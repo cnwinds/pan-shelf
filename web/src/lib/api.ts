@@ -86,12 +86,12 @@ export interface LoginState {
 }
 export type PanState = 'in_pan' | 'queued' | 'available' | 'bad' | 'pending_detail' | 'failed' | 'no_link';
 
-/** 网盘里每种格式放在游戏编号目录下的 @exfat / @folder / @other，盘游安装时按它让你选格式 */
-export type GameFormat = 'exfat' | 'folder' | 'unknown';
+/** 网盘里每种格式放在游戏编号目录下的 @folder / @zstd / @exfat / @other，盘游安装时按它让你选格式 */
+export type GameFormat = 'folder' | 'zstd' | 'exfat' | 'unknown';
 /** 一种格式的状态：in_pan 已在网盘，queued 排队转存，available 可加入，bad 盘游说不能玩，failed 转存失败，none 没有能用的链接 */
 export interface FormatState { format: GameFormat; state: 'in_pan' | 'queued' | 'available' | 'bad' | 'failed' | 'none'; surl: string; version: string | null; firmware: string | null }
 
-export interface GameLink { surl: string; pwd: string; status: string; attempts: number; last_error: string | null; dest_dir: string | null; transferred_at: string | null; remark: string | null; format: 'exfat' | 'folder' | 'pkg' | 'unknown' | null; files_at?: string | null; allow_bad?: number; share_size?: number | null }
+export interface GameLink { surl: string; pwd: string; status: string; attempts: number; last_error: string | null; dest_dir: string | null; transferred_at: string | null; remark: string | null; format: 'folder' | 'zstd' | 'exfat' | 'pkg' | 'unknown' | null; files_at?: string | null; allow_bad?: number; share_size?: number | null }
 
 /** 盘游里的一条评价。at 是秒级时间戳，device 是评价所在设备（「PS5」「电脑 XXX」） */
 export interface Review {
@@ -188,7 +188,7 @@ export interface Game {
   meta_state?: 'ready' | 'pending' | 'missing';
   pan_state?: PanState;
   pan_size?: number | null;
-  /** 没入盘时按 exFAT、文件夹、未标注的顺序取第一种的分享大小，没列过分享时为空 */
+  /** 没入盘时按文件夹、ZSTD、exFAT、未标注的顺序取第一种的分享大小，没列过分享时为空 */
   share_size?: number | null;
   pan_paths?: string[];
   pan_folders?: PanFolder[];

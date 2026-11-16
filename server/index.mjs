@@ -16,7 +16,7 @@ import { startLibraryPublish } from './library-publish.mjs';
 import { startAnalyzer } from './analyze.mjs';
 import { startFeedbackSync } from './feedback.mjs';
 import { startSiteMetaBackfill } from './site-meta.mjs';
-import { repickMultiFormat } from './linkpick.mjs';
+import { repickMultiFormat, reclassifyZstdFormat } from './linkpick.mjs';
 import routes from './api.mjs';
 import './tasks/crawl.mjs';
 import './tasks/transfer.mjs';
@@ -31,6 +31,10 @@ if (migrated) console.log(`已导入旧版数据：帖子 ${migrated.posts}，�
 initCatalog();
 const repicked = repickMultiFormat();
 if (repicked) console.log(`改为每种格式各收一个版本：${repicked} 条原先自动跳过的链接改回「可入盘」`);
+const zstd = reclassifyZstdFormat();
+if (zstd.updated || zstd.restored) {
+  console.log(`识别 ZSTD 格式：${zstd.updated} 条链接改标为 zstd${zstd.restored ? `，另有 ${zstd.restored} 条改回「可入盘」` : ''}`);
+}
 const interrupted = recoverOnBoot();
 if (interrupted) console.log(`上次有 ${interrupted} 个任务未完成，已标记为「已中断」，可在任务页重新运行`);
 

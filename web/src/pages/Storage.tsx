@@ -186,7 +186,7 @@ function PanplayLibraryPanel() {
   );
 }
 
-const PLAN_FORMAT: Record<string, string> = { exfat: 'exFAT', folder: '文件夹', unknown: '未标注' };
+const PLAN_FORMAT: Record<string, string> = { folder: '文件夹', zstd: 'ZSTD', exfat: 'exFAT', unknown: '未标注' };
 
 // 最近分析出来的编排：点开看内容，点名字到游戏库打开那个游戏
 function RecentPlans({ running, done }: { running: boolean; done: number }) {
