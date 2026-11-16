@@ -109,11 +109,14 @@ function buildPanInventory(source_id) {
     const tops = new Map(all('SELECT name, size, scanned_at FROM du_results WHERE parent IN (?, ?)', src.dest_dir, root).map(r => [r.name, r]));
     for (const r of all('SELECT parent, size, scanned_at FROM du_results WHERE parent LIKE ?', root + '/%')) {
       const name = r.parent.slice(root.length + 1);
-      if (name.includes('/')) continue;
-      const kids = tops.get(name)?.kids || { size: 0, scanned_at: '' };
+      if (!name || name.includes('/')) continue;
+      const top = tops.get(name);
+      // 没有顶层行的 @exfat/@folder 是孤儿缓存，不能当成还在网盘
+      if (!top) continue;
+      const kids = top.kids || { size: 0, scanned_at: '' };
       kids.size += Number(r.size) || 0;
       if (r.scanned_at > kids.scanned_at) kids.scanned_at = r.scanned_at;
-      tops.set(name, { ...(tops.get(name) || { name, size: null, scanned_at: '' }), kids });
+      tops.set(name, { ...top, kids });
     }
     const rows = [...tops.values()].map(r => r.kids && (r.size == null || r.kids.scanned_at > r.scanned_at) ? { name: r.name, size: r.kids.size } : r);
     for (const r of rows) {
@@ -713,27 +716,46 @@ export default async function routes(app) {
     const path = req.query.path || '/';
     let rows = duChildren(path);
     let live = false;
-    // 用量扫只把「这一层」的子项写进缓存；从游戏详情深链进来的 @folder 等往往还没扫过。
-    // 没缓存时当场列一次网盘，先让人能点开看内容，大小标成未统计，需要再点扫描。
+    // 用量扫只缓存「这一层」子项；点进 @folder/@exfat 时通常没有下一级缓存。
+    // 没缓存就当场 listDir，先让人能浏览；列失败时不要误报「目录不存在」（尤其是用量里还能看到它）。
     if (!rows.length) {
-      const list = await bd.listDir(path);
-      if (list === null) return { path, rows: [], total: 0, scanned_at: '', live: true, missing: true };
+      let list;
+      try {
+        list = await bd.listDir(path);
+      } catch (e) {
+        throw bad(502, e.message || '列目录失败');
+      }
+      if (list === null) {
+        const known = one('SELECT scanned_at, size, files FROM du_results WHERE path = ?', path);
+        // 父级用量扫过它 → 不能当成没有；退回未统计态，让用户还能点扫描
+        if (known) {
+          return { path, rows: [], total: 0, scanned_at: known.scanned_at || '', live: false, missing: false, unscanned: true };
+        }
+        return { path, rows: [], total: 0, scanned_at: '', live: true, missing: true };
+      }
       live = true;
       const join = (dir, name) => (dir === '/' ? '' : dir) + '/' + name;
       rows = list.map(e => {
         const full = join(path, e.name);
         const cached = one('SELECT * FROM du_results WHERE path = ?', full);
-        if (cached) return cached;
+        if (cached) {
+          return {
+            ...cached,
+            size: cached.size == null ? null : Number(cached.size),
+            files: cached.files == null ? null : Number(cached.files),
+            is_dir: Number(cached.is_dir) ? 1 : 0,
+          };
+        }
         return {
           path: full, parent: path, name: e.name, is_dir: e.isdir ? 1 : 0,
           size: e.isdir ? null : e.size, files: e.isdir ? null : 1, dirs: 0, fails: 0, scanned_at: '',
         };
-      }).sort((a, b) => (b.size || 0) - (a.size || 0) || a.name.localeCompare(b.name));
+      }).sort((a, b) => (Number(b.size) || 0) - (Number(a.size) || 0) || a.name.localeCompare(b.name));
     }
     const sized = rows.filter(r => r.size != null);
     return {
-      path, rows, live, missing: false,
-      total: sized.reduce((a, r) => a + r.size, 0),
+      path, rows, live, missing: false, unscanned: false,
+      total: sized.reduce((a, r) => a + Number(r.size), 0),
       scanned_at: rows.reduce((a, r) => (r.scanned_at > a ? r.scanned_at : a), ''),
     };
   });

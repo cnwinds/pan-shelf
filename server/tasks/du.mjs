@@ -7,6 +7,30 @@ import { nowIso } from '../util.mjs';
 const parentOf = (p) => p === '/' ? '' : (p.slice(0, p.lastIndexOf('/')) || '/');
 const join = (dir, name) => (dir === '/' ? '' : dir) + '/' + name;
 
+// 对照网盘这一层的实时子项名，清掉用量缓存里已经不存在的条目（含顶层行已删、只剩 @exfat/@folder 的孤儿）。
+// 否则游戏库会按孤儿缓存继续显示「已入盘」，退出网盘也清不掉状态。
+export function purgeStaleDu(root, liveNames) {
+  const base = String(root || '/').replace(/\/+$/, '') || '/';
+  const live = liveNames instanceof Set ? liveNames : new Set(liveNames || []);
+  let removed = 0;
+  for (const old of all('SELECT path, name FROM du_results WHERE parent = ?', base)) {
+    if (live.has(old.name)) continue;
+    exec('DELETE FROM du_results WHERE path = ? OR path LIKE ?', old.path, old.path + '/%');
+    removed++;
+  }
+  // 顶层行没了时，上面的循环看不到 parent=游戏目录 的 @folder/@exfat；按路径第一段再扫一遍
+  const doomed = new Set();
+  for (const { path } of all('SELECT path FROM du_results WHERE path LIKE ?', base + '/%')) {
+    const top = path.slice(base.length + 1).split('/')[0];
+    if (top && !live.has(top)) doomed.add(join(base, top));
+  }
+  for (const p of doomed) {
+    exec('DELETE FROM du_results WHERE path = ? OR path LIKE ?', p, p + '/%');
+    removed++;
+  }
+  return removed;
+}
+
 async function duTree(ctx, start, stats) {
   let size = 0, files = 0, dirs = 0, fails = 0;
   const queue = [start];
@@ -52,11 +76,9 @@ defineJob('du', {
     const upsert = (e, r) => exec(`INSERT OR REPLACE INTO du_results (path, parent, name, is_dir, size, files, dirs, fails, scanned_at)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, join(root, e.name), root, e.name, e.isdir ? 1 : 0, r.size, r.files, r.dirs, r.fails, nowIso());
 
-    // 清掉已不存在的旧记录
     const names = new Set(list.map(e => e.name));
-    for (const old of all('SELECT path, name FROM du_results WHERE parent = ?', root)) {
-      if (!names.has(old.name)) exec('DELETE FROM du_results WHERE path = ? OR path LIKE ?', old.path, old.path + '/%');
-    }
+    const purged = purgeStaleDu(root, names);
+    if (purged) ctx.log(`清掉 ${purged} 条已不在网盘的用量缓存`);
     list.filter(e => !e.isdir).forEach(e => upsert(e, { size: e.size, files: 1, dirs: 0, fails: 0 }));
 
     const dirs = list.filter(e => e.isdir);

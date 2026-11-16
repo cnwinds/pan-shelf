@@ -240,4 +240,6 @@ export interface DuListing {
   live?: boolean;
   /** 网盘里没有这个目录 */
   missing?: boolean;
+  /** 用量里有这条，但这一层还没扫出子项（或刚列目录失败） */
+  unscanned?: boolean;
 }

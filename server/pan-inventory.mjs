@@ -7,6 +7,7 @@ import { serialsFromName } from './tasks/normalize.mjs';
 import { lookupCatalogBySerial } from './catalog.mjs';
 import { bus } from './bus.mjs';
 import { nowIso } from './util.mjs';
+import { purgeStaleDu } from './tasks/du.mjs';
 
 const INTERVAL_MS = 30 * 60_000;
 // 这些任务会改动转存目录，完成后立即刷新
@@ -28,8 +29,12 @@ export function syncPanInventory(sourceId) {
     const entries = await bd.listDir(src.dest_dir);
     if (entries === null) {
       exec('DELETE FROM pan_items WHERE source_id = ?', sourceId);
+      // 转存目录本身没了：底下用量缓存（含孤儿 @exfat/@folder）一并清掉
+      purgeStaleDu(src.dest_dir, []);
       return 0;
     }
+    // 顺手清掉顶层已不存在、但 @exfat/@folder 等用量缓存还挂着的孤儿，避免误判已入盘
+    purgeStaleDu(src.dest_dir, entries.map(e => e.name));
     const at = nowIso();
     let n = 0;
     tx(() => {

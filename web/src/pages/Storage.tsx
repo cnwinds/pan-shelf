@@ -41,10 +41,10 @@ function Usage() {
   const rows = du.data?.rows || [];
   const live = !!du.data?.live;
   const missing = !!du.data?.missing;
+  const unscanned = !!du.data?.unscanned || (live && rows.some(r => r.is_dir && r.size == null));
   const max = Math.max(1, ...rows.map(r => r.size || 0));
   const crumbs = path === '/' ? [] : path.split('/').filter(Boolean);
   const go = (p: string) => setSp(p === '/' ? {} : { path: p });
-  const unscannedDirs = live && rows.some(r => r.is_dir && r.size == null);
 
   return (
     <div className="space-y-5">
@@ -79,20 +79,22 @@ function Usage() {
             ))}
           </nav>
           <div className="flex items-center gap-2">
-            {du.data?.scanned_at && !live && <span className="text-xs text-muted">统计于 {dateTime(du.data.scanned_at)}</span>}
-            {unscannedDirs && !job && <span className="text-xs text-muted">尚未统计大小</span>}
-            <button className="btn btn-sm" disabled={!!job || start.isPending || missing} onClick={() => start.mutate({ type: 'du', params: { path } })}><ScanSearch size={12} />{live || !rows.length ? '扫描此目录' : '补扫未统计的'}</button>
-            {!live && rows.length > 0 && <button className="btn btn-sm" disabled={!!job || start.isPending} onClick={() => start.mutate({ type: 'du', params: { path, force: true } })}><RefreshCw size={12} />全部重新扫描</button>}
+            {du.data?.scanned_at && !live && !du.data?.unscanned && <span className="text-xs text-muted">统计于 {dateTime(du.data.scanned_at)}</span>}
+            {unscanned && !job && rows.length > 0 && <span className="text-xs text-muted">尚未统计大小</span>}
+            <button className="btn btn-sm" disabled={!!job || start.isPending || missing} onClick={() => start.mutate({ type: 'du', params: { path } })}><ScanSearch size={12} />{live || unscanned || !rows.length ? '扫描此目录' : '补扫未统计的'}</button>
+            {!live && !unscanned && rows.length > 0 && <button className="btn btn-sm" disabled={!!job || start.isPending} onClick={() => start.mutate({ type: 'du', params: { path, force: true } })}><RefreshCw size={12} />全部重新扫描</button>}
           </div>
         </div>
         <ErrorNote error={start.error} />
         <ErrorNote error={du.error} />
         {missing ? (
           <Empty icon={<Folder size={28} />} title="网盘里没有这个目录">可能已经删掉或改名了，回上一级看看。</Empty>
-        ) : rows.length === 0 && !du.isLoading ? (
-          <Empty icon={<Folder size={28} />} title="这个目录是空的" />
-        ) : rows.length === 0 ? (
+        ) : rows.length === 0 && (du.isLoading || du.isFetching) ? (
           <Empty icon={<ScanSearch size={28} />} title="正在读取目录…" />
+        ) : rows.length === 0 && unscanned ? (
+          <Empty icon={<ScanSearch size={28} />} title="这个目录还没统计过">点击「扫描此目录」列出并统计子项大小。大目录可能需要几分钟，扫描期间不影响采集和转存。</Empty>
+        ) : rows.length === 0 ? (
+          <Empty icon={<Folder size={28} />} title="这个目录是空的" />
         ) : (
           <table className="w-full text-[13px]">
             <tbody>

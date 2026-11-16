@@ -12,17 +12,15 @@ import { linkFormat } from '../layout.mjs';
 import { requireLogin } from './transfer.mjs';
 import { serialsFromName } from './normalize.mjs';
 import { treeSize } from './prune.mjs';
+import { purgeStaleDu } from './du.mjs';
 
 // 返回 [{ post_id, title, serial, targets: [{ path, name, isdir, size }], problem }]
 export async function resolveRemoval(sourceId, postIds, { sizes = true, formats = null } = {}) {
   const src = getSource(sourceId);
   if (!src) throw new Error('来源不存在');
   const top = await bd.listDir(src.dest_dir) || [];
-  // 用实时目录清掉用量缓存里已不存在的条目，否则游戏库会按缓存继续显示为已入盘
-  const liveNames = new Set(top.map(e => e.name));
-  for (const old of all('SELECT path, name FROM du_results WHERE parent = ?', src.dest_dir)) {
-    if (!liveNames.has(old.name)) exec('DELETE FROM du_results WHERE path = ? OR path LIKE ?', old.path, old.path + '/%');
-  }
+  // 用实时目录清掉用量缓存里已不存在的条目（含只剩 @exfat/@folder 的孤儿），否则游戏库会按缓存继续显示为已入盘
+  purgeStaleDu(src.dest_dir, top.map(e => e.name));
   const owners = top.map(e => ({ e, serials: serialsFromName(e.name) }));
   const match = (wanted) => owners.filter(({ serials }) => [...serials].some(s => wanted.has(s)));
   const out = [];
