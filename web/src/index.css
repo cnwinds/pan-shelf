@@ -301,6 +301,16 @@
   transition: border-color 0.15s, background 0.15s;
 }
 
+/* type=search 自带清除钮，和 .find-clear 会叠成两个 × */
+.find input::-webkit-search-cancel-button,
+.find input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.find input::-ms-clear {
+  display: none;
+}
+
 .find input::placeholder {
   color: var(--faint);
 }
