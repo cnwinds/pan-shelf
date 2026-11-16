@@ -230,4 +230,14 @@ export interface NormalizePlan {
   result: { targets: string[]; results: { target: string; ok: boolean; ops: any[] }[]; counts: Record<string, number> } | null;
 }
 
-export interface DuRow { path: string; parent: string; name: string; is_dir: number; size: number; files: number; dirs: number; fails: number; scanned_at: string }
+export interface DuRow {
+  path: string; parent: string; name: string; is_dir: number;
+  size: number | null; files: number | null; dirs: number; fails: number; scanned_at: string;
+}
+export interface DuListing {
+  path: string; rows: DuRow[]; total: number; scanned_at: string;
+  /** 没有用量缓存，内容是当场从网盘列出来的 */
+  live?: boolean;
+  /** 网盘里没有这个目录 */
+  missing?: boolean;
+}

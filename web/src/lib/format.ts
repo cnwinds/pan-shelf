@@ -6,6 +6,12 @@ export function bytes(n?: number | null) {
   return Math.max(0, Math.round(n / 1024)) + ' KB';
 }
 
+/** 盘架「网盘」页打开某个目录的地址 */
+export function storageDirPath(path: string) {
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return p === '/' ? '/storage' : `/storage?path=${encodeURIComponent(p)}`;
+}
+
 export function duration(sec?: number | null) {
   if (sec == null || !Number.isFinite(sec)) return '-';
   sec = Math.round(sec);

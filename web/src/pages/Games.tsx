@@ -29,7 +29,7 @@ import { api, type BlockedAdd, type FormatState, type Game, type GameFormat, typ
 import { useAccount, useSetup, useSources } from '../lib/hooks';
 import { Dropdown } from '../components/Dropdown';
 import { Chip, Empty, ErrorNote, Modal, cx, linkStatus } from '../components/ui';
-import { bytes, dateTime } from '../lib/format';
+import { bytes, dateTime, storageDirPath } from '../lib/format';
 
 const PRIMARY_FILTERS: { id: string; label: string }[] = [
   { id: 'all', label: '全部' },
@@ -1192,7 +1192,6 @@ function GameDrawer({
         : '';
 
   const savedLink = game.links.find(l => l.status === 'saved' || l.status === 'exists');
-  const panPath = game.pan_paths?.length ? game.pan_paths.join('、') : savedLink?.dest_dir || '';
   const folders = game.pan_folders || [];
   const panSize =
     folders.length && folders.every(f => f.size != null)
@@ -1280,7 +1279,22 @@ function GameDrawer({
                   <div className="text-[13px] font-medium text-[#5fd3a0]">
                     已在网盘{panSize ? ` · ${bytes(panSize)}` : measure.isPending ? ' · 正在统计大小…' : ''}
                   </div>
-                  {!folders.length && panPath && <div className="mt-0.5 break-all text-xs text-muted">{panPath}</div>}
+                  {!folders.length && !!game.pan_paths?.length && (
+                    <div className="mt-0.5 break-all text-xs text-muted">
+                      {game.pan_paths.map((p, i) => (
+                        <span key={p}>
+                          {i > 0 && '、'}
+                          <Link
+                            to={storageDirPath(p)}
+                            className="font-mono text-[#7aa8ff] hover:underline"
+                            title="在网盘页打开"
+                          >
+                            {p}
+                          </Link>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -1577,10 +1591,31 @@ function GameDrawer({
 
                       <div className="flex items-center justify-between gap-2 pt-0.5 text-[11px] text-muted">
                         {(() => {
-                          const text = l.transferred_at
-                            ? `转存于 ${dateTime(l.transferred_at)} → ${(l.status === 'saved' || l.status === 'exists') && panPath ? panPath : l.dest_dir}`
-                            : l.last_error || '';
-                          return <span className="min-w-0 break-all">{text}</span>;
+                          if (!l.transferred_at) {
+                            return <span className="min-w-0 break-all">{l.last_error || ''}</span>;
+                          }
+                          const path =
+                            l.dest_dir ||
+                            ((l.status === 'saved' || l.status === 'exists') && game.pan_paths?.length === 1
+                              ? game.pan_paths[0]
+                              : null);
+                          return (
+                            <span className="min-w-0 break-all">
+                              转存于 {dateTime(l.transferred_at)}
+                              {path ? (
+                                <>
+                                  {' → '}
+                                  <Link
+                                    to={storageDirPath(path)}
+                                    className="font-mono text-[#7aa8ff] hover:underline"
+                                    title="在网盘页打开"
+                                  >
+                                    {path}
+                                  </Link>
+                                </>
+                              ) : null}
+                            </span>
+                          );
                         })()}
                         <div className="flex shrink-0 items-center gap-1.5">
                           {l.status !== 'saved' && l.status !== 'exists' && (
@@ -1700,16 +1735,29 @@ function PanFolders({
         </button>
       </div>
       <div className="space-y-1">
-        {folders.map(f => (
-          <div key={f.path} className="flex items-center gap-1.5" title={f.path}>
-            {f.isdir === false ? <File size={13} className="shrink-0 text-muted" /> : <Folder size={13} className="shrink-0 text-[#4d8bff]" />}
-            <span className="min-w-0 truncate font-mono text-ink">{f.name}</span>
-            {f.isdir && f.files != null && <span className="num shrink-0 text-muted">{f.files} 个文件</span>}
-            <span className="num ml-auto shrink-0 text-ink">
-              {f.size != null ? bytes(f.size) : f.isdir == null ? '网盘里没找到' : measuring ? '统计中…' : '—'}
-            </span>
-          </div>
-        ))}
+        {folders.map(f => {
+          const openPath = f.isdir === false ? f.path.replace(/\/[^/]+$/, '') || '/' : f.path;
+          return (
+            <div key={f.path} className="flex items-center gap-1.5" title={f.path}>
+              {f.isdir === false ? <File size={13} className="shrink-0 text-muted" /> : <Folder size={13} className="shrink-0 text-[#4d8bff]" />}
+              {f.isdir == null ? (
+                <span className="min-w-0 truncate font-mono text-ink">{f.name}</span>
+              ) : (
+                <Link
+                  to={storageDirPath(openPath)}
+                  className="min-w-0 truncate font-mono text-[#7aa8ff] hover:underline"
+                  title={`在网盘页打开 ${openPath}`}
+                >
+                  {f.name}
+                </Link>
+              )}
+              {f.isdir && f.files != null && <span className="num shrink-0 text-muted">{f.files} 个文件</span>}
+              <span className="num ml-auto shrink-0 text-ink">
+                {f.size != null ? bytes(f.size) : f.isdir == null ? '网盘里没找到' : measuring ? '统计中…' : '—'}
+              </span>
+            </div>
+          );
+        })}
       </div>
       <ErrorNote error={error} />
     </div>

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Folder, File, ScanSearch, RefreshCw, FolderInput, Merge, Trash2, PencilLine, CircleCheck, CircleAlert, FolderTree, Sparkles } from 'lucide-react';
-import { api, type DuRow, type InPanBadGame, type NormalizePlan, type PanplayLibraryStatus, type RecentPlan, type ReviewStatus, type Source } from '../lib/api';
+import { api, type DuListing, type InPanBadGame, type NormalizePlan, type PanplayLibraryStatus, type RecentPlan, type ReviewStatus, type Source } from '../lib/api';
 import { PlanSummary, RemoveDialog } from './Games';
 import { useAccount, useOverview, useSources, useStartJob } from '../lib/hooks';
 import { JobCard } from '../components/JobCard';
@@ -32,13 +32,19 @@ function Usage() {
   const { data: acc } = useAccount();
   const { data: ov } = useOverview();
   const start = useStartJob();
-  const du = useQuery({ queryKey: ['du', path], queryFn: () => api.get<{ rows: DuRow[]; total: number; scanned_at: string }>(`/storage/du?path=${encodeURIComponent(path)}`) });
+  const du = useQuery({
+    queryKey: ['du', path],
+    queryFn: () => api.get<DuListing>(`/storage/du?path=${encodeURIComponent(path)}`),
+  });
   const q = acc?.quota;
   const job = ov?.active_jobs.find(j => j.type === 'du');
   const rows = du.data?.rows || [];
-  const max = Math.max(1, ...rows.map(r => r.size));
+  const live = !!du.data?.live;
+  const missing = !!du.data?.missing;
+  const max = Math.max(1, ...rows.map(r => r.size || 0));
   const crumbs = path === '/' ? [] : path.split('/').filter(Boolean);
   const go = (p: string) => setSp(p === '/' ? {} : { path: p });
+  const unscannedDirs = live && rows.some(r => r.is_dir && r.size == null);
 
   return (
     <div className="space-y-5">
@@ -73,14 +79,20 @@ function Usage() {
             ))}
           </nav>
           <div className="flex items-center gap-2">
-            {du.data?.scanned_at && <span className="text-xs text-muted">统计于 {dateTime(du.data.scanned_at)}</span>}
-            <button className="btn btn-sm" disabled={!!job || start.isPending} onClick={() => start.mutate({ type: 'du', params: { path } })}><ScanSearch size={12} />{rows.length ? '补扫未统计的' : '扫描此目录'}</button>
-            {rows.length > 0 && <button className="btn btn-sm" disabled={!!job || start.isPending} onClick={() => start.mutate({ type: 'du', params: { path, force: true } })}><RefreshCw size={12} />全部重新扫描</button>}
+            {du.data?.scanned_at && !live && <span className="text-xs text-muted">统计于 {dateTime(du.data.scanned_at)}</span>}
+            {unscannedDirs && !job && <span className="text-xs text-muted">尚未统计大小</span>}
+            <button className="btn btn-sm" disabled={!!job || start.isPending || missing} onClick={() => start.mutate({ type: 'du', params: { path } })}><ScanSearch size={12} />{live || !rows.length ? '扫描此目录' : '补扫未统计的'}</button>
+            {!live && rows.length > 0 && <button className="btn btn-sm" disabled={!!job || start.isPending} onClick={() => start.mutate({ type: 'du', params: { path, force: true } })}><RefreshCw size={12} />全部重新扫描</button>}
           </div>
         </div>
         <ErrorNote error={start.error} />
-        {rows.length === 0 ? (
-          <Empty icon={<ScanSearch size={28} />} title="这个目录还没统计过">点击「扫描此目录」统计每个子目录的大小。大目录可能需要几分钟，扫描期间不影响采集和转存。</Empty>
+        <ErrorNote error={du.error} />
+        {missing ? (
+          <Empty icon={<Folder size={28} />} title="网盘里没有这个目录">可能已经删掉或改名了，回上一级看看。</Empty>
+        ) : rows.length === 0 && !du.isLoading ? (
+          <Empty icon={<Folder size={28} />} title="这个目录是空的" />
+        ) : rows.length === 0 ? (
+          <Empty icon={<ScanSearch size={28} />} title="正在读取目录…" />
         ) : (
           <table className="w-full text-[13px]">
             <tbody>
@@ -91,13 +103,13 @@ function Usage() {
                       <button className="flex items-center gap-2 text-left hover:underline" onClick={() => go(r.path)}><Folder size={15} className="shrink-0 text-ink-2" />{r.name}</button>
                     ) : <span className="flex items-center gap-2 text-ink-2"><File size={15} className="shrink-0 text-muted" />{r.name}</span>}
                   </td>
-                  <td className="py-2 pr-4"><Bar value={r.size} max={max} color="bg-ink-2" /></td>
-                  <td className="num w-28 py-2 pr-4 text-right text-[14px]">{bytes(r.size)}</td>
-                  <td className="w-28 py-2 pr-4 text-right text-xs text-muted max-md:hidden">{r.is_dir ? `${r.files.toLocaleString()} 个文件` : ''}</td>
+                  <td className="py-2 pr-4">{r.size != null ? <Bar value={r.size} max={max} color="bg-ink-2" /> : null}</td>
+                  <td className="num w-28 py-2 pr-4 text-right text-[14px]">{r.size != null ? bytes(r.size) : <span className="text-muted">—</span>}</td>
+                  <td className="w-28 py-2 pr-4 text-right text-xs text-muted max-md:hidden">{r.is_dir ? (r.files != null ? `${r.files.toLocaleString()} 个文件` : '未统计') : ''}</td>
                 </tr>
               ))}
             </tbody>
-            <tfoot><tr className="bg-paper/60 text-xs text-muted"><td className="py-2 pl-4">合计（已统计部分）</td><td /><td className="num py-2 pr-4 text-right text-[13px] text-ink">{bytes(du.data?.total)}</td><td className="max-md:hidden" /></tr></tfoot>
+            <tfoot><tr className="bg-paper/60 text-xs text-muted"><td className="py-2 pl-4">{live ? '合计（仅已有大小的项）' : '合计（已统计部分）'}</td><td /><td className="num py-2 pr-4 text-right text-[13px] text-ink">{bytes(du.data?.total)}</td><td className="max-md:hidden" /></tr></tfoot>
           </table>
         )}
       </section>

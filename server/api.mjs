@@ -711,8 +711,31 @@ export default async function routes(app) {
   // ---------- 网盘 ----------
   app.get('/api/storage/du', async (req) => {
     const path = req.query.path || '/';
-    const rows = duChildren(path);
-    return { path, rows, total: rows.reduce((a, r) => a + r.size, 0), scanned_at: rows.reduce((a, r) => (r.scanned_at > a ? r.scanned_at : a), '') };
+    let rows = duChildren(path);
+    let live = false;
+    // 用量扫只把「这一层」的子项写进缓存；从游戏详情深链进来的 @folder 等往往还没扫过。
+    // 没缓存时当场列一次网盘，先让人能点开看内容，大小标成未统计，需要再点扫描。
+    if (!rows.length) {
+      const list = await bd.listDir(path);
+      if (list === null) return { path, rows: [], total: 0, scanned_at: '', live: true, missing: true };
+      live = true;
+      const join = (dir, name) => (dir === '/' ? '' : dir) + '/' + name;
+      rows = list.map(e => {
+        const full = join(path, e.name);
+        const cached = one('SELECT * FROM du_results WHERE path = ?', full);
+        if (cached) return cached;
+        return {
+          path: full, parent: path, name: e.name, is_dir: e.isdir ? 1 : 0,
+          size: e.isdir ? null : e.size, files: e.isdir ? null : 1, dirs: 0, fails: 0, scanned_at: '',
+        };
+      }).sort((a, b) => (b.size || 0) - (a.size || 0) || a.name.localeCompare(b.name));
+    }
+    const sized = rows.filter(r => r.size != null);
+    return {
+      path, rows, live, missing: false,
+      total: sized.reduce((a, r) => a + r.size, 0),
+      scanned_at: rows.reduce((a, r) => (r.scanned_at > a ? r.scanned_at : a), ''),
+    };
   });
   app.get('/api/storage/ls', async (req) => ({ path: req.query.path || '/', rows: (await bd.listDir(req.query.path || '/')) || [] }));
 
